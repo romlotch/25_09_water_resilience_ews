@@ -19,7 +19,7 @@ E.g.
     python 03b-plot_example_abrupt_shift.py --raw '/mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr' --chp '/mnt/data/romi/output/paper_1/output_Et_final/out_Et_chp.zarr' --var 'Et' --outdir '/mnt/data/romi/figures/paper_1/supplementary_final/supp_abrupt_shifts'
     python 03b-plot_example_abrupt_shift.py --raw '/mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr' --chp '/mnt/data/romi/output/paper_1/output_precip_final/out_precip_chp.zarr' --var 'precip' --outdir '/mnt/data/romi/figures/paper_1/supplementary_final/supp_abrupt_shifts'
 
-
+Hello
 """
 
 # ------------ helpers ------------
