@@ -26,7 +26,7 @@ E.g.
 
 """
 
-# ==== helpers ====
+# --- helpers ---
 
 def open_source_ds(path: str) -> xr.Dataset:
     """Open NetCDF or Zarr."""
@@ -44,28 +44,26 @@ def create_bivariate_color(ac1_array, std_array,
                            cmap_ac1='RdBu_r', cmap_std='RdBu_r',
                            lighten=0.15):
     """
-    Blend two colormaps by simple RGB averaging (same look as before),
-    then optionally lighten the result toward white.
+    Blend two colormaps by RGB averaging,
+    then lighten the result toward white.
 
-    lighten: 0.0 keeps original; 0.10–0.25 blends a bit lighter without
-             changing the hue.
+    lighten: 0.0 keeps original; 0.10–0.25 blends a bit lighter 
     """
     # Normalize to 0..1
     ac1 = np.clip((ac1_array - vmin_ac1) / (vmax_ac1 - vmin_ac1), 0, 1)
     std = np.clip((std_array - vmin_std) / (vmax_std - vmin_std), 0, 1)
 
-    # Sample colormaps (sRGB)
+    # Sample colormaps 
     c1 = plt.get_cmap(cmap_ac1)(ac1)[..., :3]
     c2 = plt.get_cmap(cmap_std)(std)[..., :3]
 
-    # Original look: simple average blend
     blended_rgb = (c1 + c2) / 2.0
 
     # Lighten toward white (optional)
     if lighten and lighten != 0:
         blended_rgb = np.clip(blended_rgb + lighten * (1.0 - blended_rgb), 0.0, 1.0)
 
-    # Return RGBA (alpha handled separately by your mask)
+    # Return RGBA 
     blended_rgba = np.concatenate(
         [blended_rgb, np.ones(blended_rgb.shape[:-1] + (1,))], axis=-1
     )
@@ -75,7 +73,7 @@ def create_bivariate_color(ac1_array, std_array,
 def add_base_map(ax):
     ax.add_feature(cfeature.LAND, facecolor='white', linewidth=0.5, edgecolor='none', zorder=0)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=10)
-    # Clean frame & ticks
+ 
     for s in ax.spines.values():
         s.set_visible(False)
     ax.set_xticks([])
@@ -209,7 +207,7 @@ def robust_sym_limits(da: xr.DataArray, q: float = 0.995) -> tuple[float, float]
     return -a, a
 
 
-# ==== Plotting functions ====
+# --- Plotting functions ---
 
 def plot_five_panel(ds: xr.Dataset, var_prefix: str, outdir: str,
                     add_mask: bool = True, auto_range: bool = False, q: float = 0.995):
@@ -428,7 +426,7 @@ def plot_fd_magnitude(ds: xr.Dataset, var_prefix: str, outdir: str):
 
 
 
-# ==== Main =====
+# --- Main ---
 
 def main():
     parser = argparse.ArgumentParser(description="Make maps of Kendall Tau output.")

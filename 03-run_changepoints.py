@@ -43,7 +43,9 @@ import warnings
 warnings.filterwarnings('ignore')
 
 """ 
-Function to run R-based changepoints calculation on .zarr file of variable 
+Function to run R-based changepoints calculation on .zarr file of variable. 
+
+Assumes R is installed. 
 
 python 03-run_changepoints.py --fp "/mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr" --var "Et" 
 python 03-run_changepoints.py --fp "/mnt/data/romi/output/paper_1/output_sm_final/out_sm.zarr" --var "sm" 
@@ -82,7 +84,8 @@ def prepare_rfunc():
     tibble = importr("tibble")
     changepoint = importr("changepoint")
 
-    # === Define R function === 
+    # -- Define R function ---
+    
 
     r_code = """
     function(x) {
@@ -191,7 +194,7 @@ def prepare_rfunc():
 
 def run_chp_joblib(fp, var, r_func): 
 
-    # === Wrapper for R function === 
+    # --- Wrapper for R function ---
     def run_structural_tests(ts):
         ts = pd.Series(ts)
         try:
@@ -205,11 +208,11 @@ def run_chp_joblib(fp, var, r_func):
             return np.full(19, np.nan)
         
 
-    print('=== Loading dataset ===')
+    print('--- Loading dataset ---')
     ds = xr.open_dataset(f'{fp}')
     Et = ds[f'{var}']
 
-    print('=== Preparing for parallel execution ===')
+    print('--- Preparing for parallel execution ---')
     lat_vals = Et['lat'].values
     lon_vals = Et['lon'].values
     nlat, nlon = len(lat_vals), len(lon_vals)
@@ -217,7 +220,7 @@ def run_chp_joblib(fp, var, r_func):
     Et_stacked = Et.stack(pixel=('lat', 'lon')).transpose('pixel', 'time')
     time_series_list = [Et_stacked.isel(pixel=i).values for i in range(Et_stacked.sizes['pixel'])]
 
-    print('=== Running structural change tests ===')
+    print('--- Running ---')
     with tqdm_joblib(tqdm(desc="Processing pixels...", total=len(time_series_list))):
         results = Parallel(n_jobs=-1, backend='loky')(
             delayed(run_structural_tests)(ts) for ts in time_series_list
@@ -269,7 +272,7 @@ def run_chp_joblib(fp, var, r_func):
 
 def main(fp, var):
 
-    print('=== Preparing R environment ===')
+    print('--- Preparing R environment ---')
     r_func = prepare_rfunc()
 
     run_chp_joblib(fp, var, r_func)

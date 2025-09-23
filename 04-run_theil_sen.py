@@ -8,20 +8,14 @@ from scipy.stats import theilslopes
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
-
-
-'''
-Executable function to run Theil–Sen slope estimation on a set of already computed
+"""
+Run Theil–Sen slope estimation on a set of already computed
 EWS time series.
 
-Robust Theil–Sen slope + confidence interval. Significance is flagged when the CI
+Robust Theil–Sen slope + confidence interval. Significance iif the CI
 excludes zero.
 
-Assumptions:
-- Time spacing is weekly; we convert to "years" using x = arange(n)/12 to get
-  slope units per year. If your data isn’t monthly, adjust the divisor.
-
-Example runs:
+E.g.:
 python 04-run_theil_sen.py --input /mnt/data/romi/output/paper_1/output_sm_final/out_sm.zarr --workers 8
 python 04-run_theil_sen.py --input /mnt/data/romi/output/paper_1/output_persiann_cdr/out_persiann_cdr_weekly_masked.zarr --workers 8
 python 04-run_thiel_sen.py --input /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr --workers 8
@@ -29,21 +23,11 @@ python 04-run_thiel_sen.py --input /mnt/data/romi/output/paper_1/output_Et_final
 # Masked breakpoint EWS
 python 250328_theil_sen_slope.py --input /mnt/data/romi/output/paper_1/output_changepoints/soil_moisture/sm_ews_breakpoints_pettitt.zarr --workers 8
 python 250328_theil_sen_slope.py --input /mnt/data/romi/output/paper_1/output_changepoints/transpiration/Et_ews_breakpoints_pettitt.zarr --workers 8
-'''
+"""
 
 
-def tsfunc(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Dataset:
-    """Compute Theil–Sen slope (+ CI) along 'time' for a single DataArray.
-
-    Outputs:
-      var_ts     : slope per year
-      var_ts_lo  : lower CI bound
-      var_ts_hi  : upper CI bound
-      var_ts_sig : 1 if CI excludes 0, else 0
-    """
-
-    # SciPy's theilslopes returns (slope, intercept, lo_slope, up_slope) at (1-alpha) CI.
-    # Data is weekly, convert x to years to get slope per year.
+def tsfunc(ds, var, alpha = 0.05):
+    # Assumes data is weekly, convert x to years to get slope per year.
     def _ts(y):
         # y is a 1D numpy array along time for one (lat, lon) cell
         if y.size == 0 or np.all(np.isnan(y)):
@@ -51,7 +35,7 @@ def tsfunc(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Dataset:
 
         x = np.arange(y.size) / 52.0  # years 
 
-        # Pairwise drop NaNs (keep only positions where y is finite)
+        # Drop Nans
         mask = np.isfinite(y)
         if mask.sum() < 2:
             return np.nan, np.nan, np.nan, np.nan
@@ -59,7 +43,7 @@ def tsfunc(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Dataset:
         xv = x[mask]
         yv = y[mask]
 
-        # Need at least two distinct x values
+        # Need at least two different x values
         if np.unique(xv).size < 2:
             return np.nan, np.nan, np.nan, np.nan
 
@@ -115,7 +99,7 @@ def _worker_compute(varname, input_path, tmp_dir, alpha):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Compute Theil–Sen slope in parallel, then merge."
+        description="Compute Theil–Sen in parallel then merge."
     )
     p.add_argument("--input",   required=True, help="path/to/input.zarr")
     p.add_argument("--workers", type=int, default=4, help="parallel processes")
@@ -128,7 +112,6 @@ def main():
         print("Input not found:", inp, file=sys.stderr)
         sys.exit(1)
 
-    # Choose variables (same suffix logic as your original script)
     ds0 = xr.open_zarr(inp, chunks={})
     suffixes = ("ac1", "std", "skew", "kurt", "fd")
     vars_ = [
@@ -143,18 +126,17 @@ def main():
         sys.exit(1)
     print("Will process:", vars_)
 
-    # Prepare final output path
+    # Prep final output
     base = os.path.splitext(os.path.basename(inp))[0]
     final_store = os.path.join(os.path.dirname(inp), base + "_ts.zarr")
     if os.path.exists(final_store):
         print("Output already exists:", final_store)
         sys.exit(0)
 
-    # Make a temp dir for per-var stores
+    # Make temp dir for per-var stores
     tmp_dir = os.path.join(os.path.dirname(inp), base + "_ts_temp")
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # Launch per-var workers
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
         futures = {
             exe.submit(_worker_compute, v, inp, tmp_dir, args.alpha): v
@@ -170,7 +152,7 @@ def main():
             except Exception as e:
                 print(f"[ERROR] {v}: {e}", file=sys.stderr)
 
-    # Merge all the per-var stores into one
+    # Merge all the per-var 
     print("Merging into final store:", final_store)
     parts = [xr.open_zarr(os.path.join(tmp_dir, f"{v}.zarr")) for v in vars_]
     merged = xr.merge(parts)

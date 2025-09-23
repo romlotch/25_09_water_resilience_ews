@@ -9,23 +9,24 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 """
 Compute per-pixel change in mean between first and second half
-of each indicator time series, along with Welch's t-test (independent samples,
+of each indicator time series, plus Welch's t-test (independent samples,
 unequal variances) and a significance flag.
 
 - Split the series at mid = len(time)//2, then compare equal-length halves.
-- NaNs are handled with nan_policy='omit' (pairwise over time, per pixel).
+- nan_policy='omit'
 
 Eg.:
-python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_sm_final/out_sm.zarr --workers 4
-python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr --workers 2
-python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr --workers 4
+    python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_sm_final/out_sm.zarr --workers 4
+    python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr --workers 2
+    python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr --workers 4
 """
 
 
-def mean_change_func(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Dataset:
-    """Compute change in mean (second-half minus first-half) along 'time' plus Welch's t-test."""
+def mean_change_func(ds, var, alpha = 0.05):
 
-    # Determine equal-length halves based on this dataset's time axis
+    """Compute change in mean (second-half minus first-half) along time plus Welch's t-test."""
+
+    # Determine equal-length halves based on time 
     n_time = ds.dims.get("time", None)
     if n_time is None or n_time < 2:
         # Not enough data to split sensibly
@@ -37,26 +38,22 @@ def mean_change_func(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Datase
         return out
 
     mid = n_time // 2
-    len_half = min(mid, n_time - mid)  # equalize lengths; handles odd counts
+    len_half = min(mid, n_time - mid)  # equalize lengths if odd 
 
     # Slice equal-length halves
     first_half = ds[var].isel(time=slice(mid - len_half, mid))
     second_half = ds[var].isel(time=slice(mid, mid + len_half))
 
-    # Reindex time to a dummy 0..len_half-1 so apply_ufunc has aligned core dims
+    # Reindex time to 0..len_half-1 so apply_ufunc has aligned dimensions (fails otherwise)
     first_half = first_half.assign_coords(time=np.arange(len_half))
     second_half = second_half.assign_coords(time=np.arange(len_half))
 
     def _diff_and_t(a, b):
-        """a, b are 1D arrays (time) for one pixel. Return (diff, t, p, sig)."""
-        # Drop NaNs pairwise via scipy nan_policy, but also guard tiny samples
-        # Note: Welch's t-test (equal_var=False)
-        # Compute means with nan-robustness
         mean_a = np.nanmean(a) if np.any(np.isfinite(a)) else np.nan
         mean_b = np.nanmean(b) if np.any(np.isfinite(b)) else np.nan
         diff = mean_b - mean_a
 
-        # If fewer than 2 total finite points per group, t-test is undefined
+        # If fewer than 2 total points per group,return nan
         n_a = np.isfinite(a).sum()
         n_b = np.isfinite(b).sum()
         if n_a < 2 or n_b < 2:
@@ -87,14 +84,14 @@ def mean_change_func(ds: xr.Dataset, var: str, alpha: float = 0.05) -> xr.Datase
 
 def _worker_compute(varname, input_path, tmp_dir, alpha):
     """
-    For suffix 'varname', open input_path, compute mean change + t-test,
+    For var, open input_path, compute mean change and t-test,
     and write to a temporary store under tmp_dir/varname.zarr
     Returns the path to the temp store.
     """
     ds = xr.open_zarr(input_path).chunk({"time": -1, "lat": 50, "lon": 50})
     out_ds = mean_change_func(ds, varname, alpha=alpha)
 
-    # Clean encodings for zarr
+    # Clean encoding in case it makes it faster
     for v in out_ds.data_vars:
         out_ds[v].encoding.pop("chunks", None)
 
@@ -123,7 +120,7 @@ def main():
         print("Input not found:", inp, file=sys.stderr)
         sys.exit(1)
 
-    # Choose variables (same suffix logic as your Theil–Sen script)
+    # Choose variables
     ds0 = xr.open_zarr(inp, chunks={})
     suffixes = ("ac1", "std", "skew", "kurt", "fd")
     vars_ = [
@@ -134,22 +131,21 @@ def main():
     ]
     ds0.close()
     if not vars_:
-        print("No matching variables found.", file=sys.stderr)
+        print("No matching variables found!", file=sys.stderr)
         sys.exit(1)
     print("Will process:", vars_)
 
-    # Prepare final output path
+    # Prep final out path
     base = os.path.splitext(os.path.basename(inp))[0]
     final_store = os.path.join(os.path.dirname(inp), base + "_meanchange.zarr")
     if os.path.exists(final_store):
         print("Output already exists:", final_store)
         sys.exit(0)
 
-    # Temp dir for per-var stores
+    # Temp dir 
     tmp_dir = os.path.join(os.path.dirname(inp), base + "_meanchange_temp")
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # Launch per-var workers
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
         futures = {
             exe.submit(_worker_compute, v, inp, tmp_dir, args.alpha): v

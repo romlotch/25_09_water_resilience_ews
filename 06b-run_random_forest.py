@@ -10,6 +10,7 @@ import pandas as pd
 import xarray as xr
 import rioxarray
 
+
 import geopandas as gpd
 from shapely.geometry import Point
 
@@ -160,7 +161,7 @@ def compute_aridity_classes_like(ds_target):
     mask_interp = ds_mask["lsm"].interp(lat=precip.lat, lon=precip.lon)
     precip = precip.where(mask_interp > 0.7)
 
-    # m/month → mm/month
+    # m/month to mm/month
     precip = precip * 1000.0
     precip = precip.drop_vars(["number", "step", "surface", "spatial_ref"], errors="ignore")
 
@@ -384,9 +385,7 @@ def plot_and_save_pdp_grid_h2o(
     rug_color='k',              # black rug
     tick_color='k'              # black quantile ticks
 ):
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
+    
 
     def _logit(p):
         p = np.clip(p, 1e-12, 1-1e-12)
@@ -427,7 +426,7 @@ def plot_and_save_pdp_grid_h2o(
             qs = np.quantile(vals, np.linspace(lo, hi, nbins))
         grid = np.unique(qs)
 
-        # quick Δ check using same quantile span
+        # check using same quantile span
         loq, hiq = (x_quantile_span if x_quantile_span is not None else (0.05, 0.95))
         qlo, qhi = np.quantile(vals, [loq, hiq])
         X_lo = X_use.copy(); X_lo[feat] = qlo
@@ -436,7 +435,7 @@ def plot_and_save_pdp_grid_h2o(
         p_hi = pipe.predict_proba(X_hi)[:, 1]
         y_lo = _logit(p_lo) if use_logodds else p_lo
         y_hi = _logit(p_hi) if use_logodds else p_hi
-        print(f"[PDP-Δ] {feat}: mean@{int(100*loq)}%={np.mean(y_lo):.6f}, mean@{int(100*hiq)}%={np.mean(y_hi):.6f}, Δ={np.mean(y_hi)-np.mean(y_lo):.6f}")
+        print(f"[PDP-delta] {feat}: mean@{int(100*loq)}%={np.mean(y_lo):.6f}, mean@{int(100*hiq)}%={np.mean(y_hi):.6f}, delta={np.mean(y_hi)-np.mean(y_lo):.6f}")
 
         # PDP means
         means = []
@@ -466,7 +465,7 @@ def plot_and_save_pdp_grid_h2o(
                 if ice_center:  y = y - y_ref[i]
                 ax.plot(grid, y, lw=0.7, alpha=0.25)
 
-        # x-limits to grid span (hides extreme outliers)
+        # x-limits to grid span (to hide extreme outliers)
         ax.set_xlim(grid[0], grid[-1])
 
         # y-lims from PDP line so ICE doesn't flatten it
@@ -477,7 +476,7 @@ def plot_and_save_pdp_grid_h2o(
 
         ymin, ymax = ax.get_ylim()
 
-        # Rug (black)
+        # Rug 
         rug_y = ymin + 0.02*(ymax - ymin)
         if x_quantile_span is None:
             vals_for_rug = vals
@@ -488,7 +487,7 @@ def plot_and_save_pdp_grid_h2o(
             ax.scatter(sample, np.full_like(sample, rug_y, dtype=float),
                        marker='|', alpha=0.4, s=80, linewidths=0, color=rug_color)
 
-        # Quantile tick marks (black)
+        # Quantiles
         tick_h = 0.02*(ymax - ymin)
         for q in np.unique(qs):
             ax.plot([q, q], [ymin, ymin + tick_h], lw=1, alpha=0.7, color=tick_color)
@@ -516,14 +515,12 @@ def shap_dependence_panels(X_raw, shap_values, feat_names, features,
     for ax, f in zip(axes, features):
         j = idx[f]
         x = pd.to_numeric(X_raw[f], errors="coerce")
-        y = np.asarray(shap_values)[:, j]          # <-- ensure ndarray
+        y = np.asarray(shap_values)[:, j]         
 
         # make a boolean mask using numpy arrays on both sides
-        m = x.notna().to_numpy() & np.isfinite(y)  # <-- Series -> ndarray for the mask
-
-        # boolean-index both as numpy arrays (no .values on y)
-        x = x.to_numpy()[m]                        # <-- was x[m].values
-        y = y[m]                                   # <-- was y[m].values
+        m = x.notna().to_numpy() & np.isfinite(y)  
+        x = x.to_numpy()[m]                        
+        y = y[m]                                  
 
         lo, hi = np.nanpercentile(x, [100*qspan[0], 100*qspan[1]])
         inr = (x >= lo) & (x <= hi)
@@ -558,8 +555,7 @@ def shap_dependence_panels(X_raw, shap_values, feat_names, features,
     plt.close()
 
 def hex_to_rgba(s):
-    """Convert 8-digit hex (RRGGBBAA) or 6-digit hex (RRGGBB) to an RGBA tuple in [0,1].
-    Returns None if s is falsy (e.g., None) so callers can skip coloring."""
+  
     if not s:
         return None
     s = str(s).strip()
@@ -584,13 +580,13 @@ def main():
     # ------------------------------ #
     # Debug / speed toggles
     # ------------------------------ #
-    SPEED_MODE       = False    # Balanced sample + stratified CV (fast iterations)
-    RUN_BIOME_SHAP   = True   # Turn on when you want biome SHAP again
+    SPEED_MODE       = False   # Balanced sample + stratified CV (fast iterations)
+    RUN_BIOME_SHAP   = True    # Turn on when you want biome SHAP again
     RUN_ARIDITY_SHAP = True 
-    RUN_ABLATIONS    = True   # Turn on when you want ablations again
+    RUN_ABLATIONS    = True    # Turn on when you want ablations again
     MAX_SHAP_ROWS    = 5000    # Global SHAP rows (2000 default)
     BIOME_SHAP_MAX   = 500     # Max sampled points per biome (200 default)
-    BIOME_TOP_FEATS  = 15      # <-- plot top 15 features in SHAP-by-biome
+    BIOME_TOP_FEATS  = 15      #  plot top 15 features in SHAP-by-biome
 
     # ------------------------------ #
     # CLI args (unchanged)
@@ -613,7 +609,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------ #
-    # Predictors (unchanged lists)
+    # Predictors 
     # ------------------------------ #
     predictors_map = {
         "sm": [
@@ -710,7 +706,7 @@ def main():
     if const_cols:
         df_predictors.drop(columns=const_cols, inplace=True)
 
-    # Categorical handling flags
+    # Categorical 
     st_cols = [c for c in df_predictors.columns if c.endswith("soil_texture_processed_mean")]
     for col in st_cols:
         df_predictors[col] = df_predictors[col].astype("category")
@@ -723,12 +719,12 @@ def main():
 
     df_all  = df_all [df_all ["lat"] > -60.0].copy()
 
-    # KT columns sanity
+    # KT columns check to make sure they're not weird
     ews_cols_all = [c for c in df_all.columns if c.endswith("_kt")]
     print("Example KT stats:", df_all[ews_cols_all].describe(percentiles=[.01,.5,.99]).T.head(10))
 
     # ------------------------------ #
-    # Final numeric coercion
+    # Final numeric coercion - had to add this cause the _kt valyes were crazy
     # ------------------------------ #
     df_model = df_all.copy()
     ews_cols = [c for c in df_model.columns if c.endswith("_kt")]
@@ -744,7 +740,7 @@ def main():
 
 
     # ------------------------------ #
-    # Speed mode vs spatial folds
+    # Speed mode (balanced sub-sampling) vs spatial folds
     # ------------------------------ #
     if SPEED_MODE:
         df_model = make_balanced_sample(df_model, pos_n=args.pos_n, neg_n=args.neg_n, seed=RANDOM_STATE)
@@ -762,7 +758,7 @@ def main():
         df_model["fold_id"] = df_model["block"].map(block_to_fold).astype(int)
         
 
-    # *_kt* coercion range check
+    # fix for weird coercion
     def _coerce_float01(df, cols):
         bad = []
         for c in cols:
@@ -792,7 +788,8 @@ def main():
         remainder="drop"
     )
 
-    # Base XGB params (roughly matched to your H2O config)
+    # Base XGB params 
+
     base_xgb_params = dict(
         n_estimators=300,
         max_depth=8,
@@ -809,14 +806,14 @@ def main():
         n_jobs=4
     )
 
-    # Helper to fit across folds, gather pooled predictions and per-fold metrics
+    # Helper to fit across folds and per-fold metrics
     def cv_fit_predict(X_df, y_vec, fold_ids=None, label="Full"):
         if fold_ids is None:
-            # StratifiedKFold for SPEED_MODE path
+            # StratifiedKFold for SPEED_MODE! path
             skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
             splits = list(skf.split(X_df, y_vec))
         else:
-            # PredefinedSplit from fold_id
+            # Predefined Split from fold_id
             test_fold = np.array(fold_ids, dtype=int)
             ps = PredefinedSplit(test_fold=test_fold)
             # Build splits explicitly
@@ -829,7 +826,6 @@ def main():
         pooled_prob = np.full(y_vec.shape[0], np.nan, dtype=float)
         rows = []
 
-        # We create pipeline fresh each fold (so OneHot categories fit on train only)
         for fnum, (tr, te) in enumerate(splits):
             # scale_pos_weight per-fold (neg/pos)
             pos_tr = y_vec[tr].sum()
@@ -859,11 +855,9 @@ def main():
                 "roc_auc": float(rocf),
             })
 
-        # Micro (pooled) metrics
+
         ap_micro = float(average_precision_score(y_vec, pooled_prob))
         roc_micro = float(roc_auc_score(y_vec, pooled_prob))
-
-        # Macro averages
         fold_df = pd.DataFrame(rows)
         ap_macro_unw = float(np.nanmean(fold_df["pr_auc"])) if len(fold_df) else np.nan
         roc_macro_unw = float(np.nanmean(fold_df["roc_auc"])) if len(fold_df) else np.nan
@@ -908,7 +902,7 @@ def main():
 
         return pooled_prob, fold_df, summ
 
-    # Fit CV (main model)
+    # Fit CV 
     fold_ids = df_model["fold_id"].values if USE_FOLD_COLUMN else None
     y_prob, fold_df, summ_df = cv_fit_predict(X, y, fold_ids=fold_ids, label="Full")
     # Save fold metrics
@@ -917,7 +911,7 @@ def main():
     # Save summary
     summ_df.to_csv(outdir / f"{args.var}_metrics_summary.csv", index=False)
 
-    # PR / ROC plots from pooled predictions
+    # PR / ROC plots 
     prec, rec, _ = precision_recall_curve(y, y_prob)
     pr_auc_overall = float(average_precision_score(y, y_prob))
     roc_auc_overall = float(roc_auc_score(y, y_prob))
@@ -934,13 +928,14 @@ def main():
     plt.title("ROC curve"); plt.legend(); plt.grid(True, alpha=0.4); plt.tight_layout()
     plt.savefig(outdir / f"{args.var}_roc_curve.svg", format="svg"); plt.close()
 
-    # Calibration
+    # Calibration plot
     plot_and_save_calibration(y, y_prob, outdir / f"{args.var}_calibration.svg")
 
     # --------------------------------------------------- #
-    # Train final model on all data (for SHAP/PDP/varimp)
+    # Train final model on all data (for SHAP/PDP/varimp)!
     # --------------------------------------------------- #
-    # Compute spw on full data (for comparability )
+
+    # Compute spw on full data (to make sure they stay combaraple)
     pos_all = int(y.sum()); neg_all = int(len(y) - y.sum())
     spw_all = float(neg_all / max(1, pos_all)) if pos_all > 0 else 1.0
 
@@ -961,17 +956,6 @@ def main():
     varimp_df.to_csv(outdir / f"{args.var}_varimp_full.csv", index=False)
     plot_and_save_varimp(varimp_df, str(outdir / "varimp_top10.svg"), top_n=10)
 
-    # PDP (top 5)
-    # After you compute varimp_df, num_features, and X:
-    print("[DEBUG] First 15 varimp features:", varimp_df.sort_values("importance", ascending=False)["variable"].head(15).tolist())
-    print("[DEBUG] # of *_kt columns in X:", sum(c.endswith("_kt") for c in X.columns))
-    print("[DEBUG] Top-10 *_kt by varimp:", (varimp_df[varimp_df["variable"].str.endswith("_kt")]
-                                            .sort_values("importance", ascending=False)["variable"].head(10).tolist()))
-    for c in [f for f in X.columns if f.endswith("_kt")][:5]:
-        s = pd.to_numeric(X[c], errors="coerce")
-        print(f"[DEBUG] {c}: n={s.size}, NaN%={s.isna().mean():.3f}, nunique={s.nunique(dropna=True)}")
-        
-        
     # Overall ranking
     top_all = varimp_df.sort_values("importance", ascending=False)["variable"].tolist()
 
@@ -997,7 +981,8 @@ def main():
     # ------------------------------ #
     # SHAP 
     # ------------------------------ #
-    # Limit rows for SHAP to control memory
+
+    # Limit rows for SHAP to save memory 
     n_shap = min(MAX_SHAP_ROWS, len(X))
     rng = np.random.RandomState(0)
     shap_idx = np.sort(rng.choice(len(X), size=n_shap, replace=False))
@@ -1029,15 +1014,15 @@ def main():
     plt.title(f"SHAP global importance — Top {topN}")
     plt.tight_layout(); plt.savefig(outdir / f"{args.var}_shap_importance_top{topN}.svg", format="svg"); plt.close()
 
-    # SHAP beeswarm (requires raw matrix)
+    # SHAP beeswarm 
     plt.figure(figsize=(9, 8))
     shap.summary_plot(shap_values, X_trans, feature_names=feat_names, show=False, plot_size=None)
     plt.tight_layout(); plt.savefig(outdir / f"{args.var}_shap_beeswarm_top{topN}.svg", format="svg"); plt.close()
 
     var_dot_hex_map = {
-        "Et":     "#34692933",  # dark green
-        "sm":     "#635b2733",  # dark brown
-        "precip": "#003849ff"   # dark blue
+        "Et":     "#34692933",  
+        "sm":     "#635b2733",  
+        "precip": "#003849ff"   
     }
     dot_color = hex_to_rgba(var_dot_hex_map.get(args.var, None))
 
@@ -1141,7 +1126,7 @@ def main():
         ms = ms.loc[present + extras]
         ma = ma.loc[present + extras]
 
-        # Save + heatmaps (features as rows)
+        # Save + heatmaps 
         n_avail = g_join["WWF_MHTNAM"].value_counts()
         n_used  = sampled["WWF_MHTNAM"].value_counts()
 
@@ -1169,9 +1154,9 @@ def main():
         plt.close()
 
         var_dot_hex_map = {
-            "Et":     "#2c5e45ff",  # dark green
-            "sm":     "#5e5a2cff",  # dark brown
-            "precip": "#003849ff"   # dark blue
+            "Et":     "#2c5e45ff",  
+            "sm":     "#5e5a2cff",  
+            "precip": "#003849ff"  
         }
         hexcode = var_dot_hex_map.get(args.var, "#003849ff")
         target_rgb = mcolors.to_rgb(hexcode)
@@ -1193,18 +1178,18 @@ def main():
     
     if RUN_ARIDITY_SHAP:
         BIOME_TOP_FEATS = 10 # just 10 for aridity so it can be a square
-        # 1) Compute aridity class on the same grid as ds_tau, then join to samples
-        arid_da = compute_aridity_classes_like(ds_tau)  # returns DataArray named 'aridity_class'
+        
+        arid_da = compute_aridity_classes_like(ds_tau) 
         arid_df = arid_da.to_dataframe(name="aridity_class").reset_index()
 
         df_ar = df_model.merge(arid_df, on=["lat", "lon"], how="left")
         df_ar = df_ar[df_ar["aridity_class"].notna()].copy()
         df_ar["aridity_class"] = df_ar["aridity_class"].astype(str)
 
-        # 2) Prepare SHAP frame (same features as elsewhere)
+        
         df_for_shap = df_ar[["lat", "lon", "target", "aridity_class"] + [c for c in feature_cols if c in df_ar.columns]].copy()
 
-        # 3) Sample up to BIOME_SHAP_MAX per aridity class (reuse the same cap)
+        
         class_shap_max = int(max(1, BIOME_SHAP_MAX))
         sampled = (df_for_shap.groupby("aridity_class", group_keys=False)
                            .apply(lambda d: d.sample(min(len(d), class_shap_max),
@@ -1212,16 +1197,16 @@ def main():
                            .reset_index(drop=True))
         sampled["aridity"] = sampled["aridity_class"].astype(str)
 
-        # 4) Transform to model feature space and compute SHAP on the sampled set
+       
         X_sample       = sampled[feature_cols]
         X_sample_trans = final_pipe.named_steps["pre"].transform(X_sample)
         sv             = explainer.shap_values(X_sample_trans)
 
-        # 5) Aggregate per aridity class
+        # Aggregate per aridity class
         mean_signed = {}
         mean_abs    = {}
         for a, d in sampled.groupby("aridity"):
-            pos = d.index.to_numpy()          # indices are 0..N-1 after reset_index(drop=True)
+            pos = d.index.to_numpy()          
             sv_a = sv[pos, :]
             mean_signed[a] = sv_a.mean(axis=0)
             mean_abs[a]    = np.abs(sv_a).mean(axis=0)
@@ -1229,20 +1214,19 @@ def main():
         mean_signed_df = pd.DataFrame(mean_signed, index=feat_names).T
         mean_abs_df    = pd.DataFrame(mean_abs,    index=feat_names).T
 
-        # 6) Keep the same global top features ordering
         order_feats = shap_summary["feature"].tolist()[:BIOME_TOP_FEATS]
         ms = mean_signed_df[order_feats]
         ma = mean_abs_df[order_feats]
 
-        # Optional: if ARIDITY_LABELS exists globally, use it to order classes
+       
         if "ARIDITY_LABELS" in globals():
             ordered = [c for c in ARIDITY_LABELS if c in ms.index]
             extras  = [c for c in ms.index if c not in ordered]
-            if ordered:    # only reindex when we actually matched labels
+            if ordered:    #
                 ms = ms.loc[ordered + extras]
                 ma = ma.loc[ordered + extras]
 
-        # 7) Save CSVs with N_available and N_used appended (same pattern as biome)
+  
         n_avail = df_ar["aridity_class"].value_counts()
         n_used  = sampled["aridity_class"].value_counts()
         cols = list(ms.index)
@@ -1256,7 +1240,7 @@ def main():
         ms_out.to_csv(outdir / f"{args.var}_shap_by_aridity_mean_signed_top{BIOME_TOP_FEATS}.csv")
         ma_out.to_csv(outdir / f"{args.var}_shap_by_aridity_mean_abs_top{BIOME_TOP_FEATS}.csv")
 
-        # 8) Heatmaps (same styling, filenames include 'aridity')
+        # Heatmaps 
         vmax = np.nanmax(np.abs(ms.T.values))
         plt.figure(figsize=(0.6*len(ms.index)+4, 0.35*len(ms.columns)+2))
         sn.heatmap(ms.T, cmap="RdBu_r", vmin=-vmax, vmax=vmax, center=0, annot=False)
@@ -1266,9 +1250,9 @@ def main():
         plt.close()
 
         var_dot_hex_map = {
-            "Et":     "#2c5e45ff",  # dark green
-            "sm":     "#5e5a2cff",  # dark brown
-            "precip": "#003849ff"   # dark blue
+            "Et":     "#2c5e45ff",  
+            "sm":     "#5e5a2cff",  
+            "precip": "#003849ff"   
         }
         hexcode = var_dot_hex_map.get(args.var, "#003849ff")
         target_rgb = mcolors.to_rgb(hexcode)
@@ -1289,14 +1273,14 @@ def main():
     if RUN_ABLATIONS:
         def run_abl(feats, label):
             X_sub = df_model[feats].copy()
-            # rebuild cat/num per subset
+            
             cat_sub = [c for c in cat_features if c in feats]
             num_sub = [c for c in X_sub.columns if c not in cat_sub]
             pre = ColumnTransformer(
                 [("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32), cat_sub),
                  ("num", "passthrough", num_sub)]
             )
-            # Replace preproc inside cv loop by closure
+            
             nonlocal_preproc = pre
 
             def cv_local(Xd, yd, fold_ids_local):

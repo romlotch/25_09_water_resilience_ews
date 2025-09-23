@@ -16,19 +16,18 @@ import rioxarray
 """
 Driver Data Pipeline 
 
-Formats and consolidates a set of driving environmental variables 
+Formats and consolidates driving environmental variables 
 for the explanatory ML model. Some come from ERA5, others from GEE. 
   - Opens monthly ERA5 GRIB datasets (temperature, precipitation, soil moisture,
     evaporation from bare soil / "transpiration", wind u/v, etc.)
     - Computes mean, std, linear monthly trend 
     - Saves out to Zarr 
-  - Processes PET from NetCDFs by coarsening and resampling to monthly
   - Processes groundwater table depth datasets and harmonizes to a global grid
   - Computes ENSO–precip correlation
   - Converts FAO GMIA ASC irrigated area to Zarr and interpolates to 0.25°
   - Restructures Land Cover features GeoTIFF (category + change) and saves to Zarr
   - Uses GEE to process and export additional drivers (NDVI, GPP, PDSI, Tree/Non-tree cover, Soil texture, Elevation, Fire, Croplands).
-    But these require interactive auth so are disabled. 
+    But these require authorisation so are disabled by default. If enabled they'll be saved to the usesr own google drive. 
 
 All filepaths are hardcoded (in caps). Datasets where values contained NaN in places where there isn't data,
 NaN's were set to 0 where appropriate (e.g. non-tree cover in forests and vice versa) so those pixels aren't 
@@ -37,9 +36,8 @@ filtered out when prepping data for the ML model.
 """
 
 
-# -----------------------------------------------------------------------------
-# Configuration flags (toggle sections on/off as needed)
-# -----------------------------------------------------------------------------
+# Configuration flags 
+
 
 RUN_ERA5_T2M = True
 RUN_ERA5_PRECIP = True
@@ -53,7 +51,7 @@ RUN_ENSO_CORRELATION = True
 RUN_IRRIGATED_AREA = True
 RUN_LULCC_RESTRUCTURE = True
 
-# Google Earth Engine exports (require interactive auth); off by default
+# Google Earth Engine exports (requires authorisation)
 RUN_GEE_PDSI = False
 RUN_GEE_GPP = False
 RUN_GEE_TREE_COVER = False
@@ -123,8 +121,8 @@ TIME_END = "2023-12-31"
 # Helpers
 # -----------------------------------------------------------------------------
 
-def open_grib_files(folder: Path) -> xr.Dataset:
-    """Open and concatenate ERA5 monthly GRIB files."""
+def open_grib_files(folder):
+   
     files = sorted(glob(str(folder / "*.grib")))
     if not files:
         raise FileNotFoundError(f"No .grib files found under: {folder}")
@@ -135,16 +133,16 @@ def open_grib_files(folder: Path) -> xr.Dataset:
     return xr.concat(datasets, dim="time")
 
 
-def wrap_sort_lon(ds: xr.Dataset, lon_name: str = "lon") -> xr.Dataset:
-    """Wrap longitudes to -180, 180 instead of 0, 360 and sort."""
+def wrap_sort_lon(ds, lon_name):
+    
     if lon_name in ds.coords:
         ds = ds.assign_coords({lon_name: ((ds[lon_name] + 180) % 360) - 180})
         ds = ds.sortby(lon_name)
     return ds
 
 
-def ensure_lat_lon(ds: xr.Dataset) -> xr.Dataset:
-    """Ensure dimensions are named lat/lon, if they are latitude/longitude."""
+def ensure_lat_lon(ds):
+
     ren = {}
     if "latitude" in ds.coords:
         ren["latitude"] = "lat"
@@ -155,13 +153,13 @@ def ensure_lat_lon(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
-def to_numeric_months(time_coord: xr.DataArray) -> xr.DataArray:
+def to_numeric_months(time_coord):
     """Convert time coordinate to months since start for linear trend."""
     time_in_days = (time_coord - time_coord.isel(time=0)) / np.timedelta64(1, "D")
     return time_in_days / 30.44
 
 
-def compute_stats_and_trend(ds: xr.Dataset, var: str) -> xr.Dataset:
+def compute_stats_and_trend(ds, var):
     """Compute mean, std, and monthly trend for ds[var]."""
     if var not in ds:
         raise KeyError(f"Variable '{var}' not in dataset. Available: {list(ds.data_vars)}")
@@ -184,19 +182,17 @@ def compute_stats_and_trend(ds: xr.Dataset, var: str) -> xr.Dataset:
     return out
 
 
-def finalize_geospatial(ds: xr.Dataset) -> xr.Dataset:
-    """Standardize CRS and set spatial dims (rioxarray)."""
+def finalize_geospatial(ds):
+ 
     ds = ensure_lat_lon(ds)
     ds = wrap_sort_lon(ds, "lon")
-    try:
-        ds = ds.rio.write_crs("EPSG:4326")
-        ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
-    except Exception as e:
-        warnings.warn(f"rioxarray CRS/dim assignment failed: {e}")
+    ds = ds.rio.write_crs("EPSG:4326")
+    ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
+
     return ds
 
 
-def process_and_datasets(ds: xr.Dataset, variable: str, output_zarr: str) -> xr.Dataset:
+def process_and_datasets(ds, variable, output_zarr):
     """Select time, compute stats/trend, and save to Zarr."""
     ds = ensure_lat_lon(ds)
     ds = ds.sel(time=slice(TIME_START, TIME_END))
@@ -213,16 +209,16 @@ def process_and_datasets(ds: xr.Dataset, variable: str, output_zarr: str) -> xr.
     return out
 
 
-def standardize_lat_lon(ds: xr.Dataset) -> xr.Dataset:
+def standardize_lat_lon(ds):
     """Standardize dimension names to lat/lon if needed."""
     if "latitude" in ds.dims and "longitude" in ds.dims:
         ds = ds.rename({"latitude": "lat", "longitude": "lon"})
     return ds
 
 
-def process_and_coarsen_pet(filepath: str, variable: str, target_res: float = 0.25) -> xr.Dataset:
+def process_and_coarsen_pet(filepath, variable, target_res = 0.25):
     """
-    Pre-processes a PET dataset: coarsens to 0.25°, resamples daily to monthly mean,
+    Pre-processes PET ds: coarsens to 0.25, resamples daily to monthly mean,
     returns monthly. 
     """
     print(f"Processing PET: {filepath}")
@@ -237,7 +233,7 @@ def process_and_coarsen_pet(filepath: str, variable: str, target_res: float = 0.
         warnings.simplefilter("ignore", category=FutureWarning)
         ds = ds.where(ds[variable] < 9999)
 
-    # Coarsen to target resolution, if finer
+    # Coarsen to target res
     lat_step = float(abs(ds.lat[1] - ds.lat[0]))
     lon_step = float(abs(ds.lon[1] - ds.lon[0]))
     lat_factor = int(target_res / lat_step) if lat_step < target_res else 1
@@ -251,13 +247,13 @@ def process_and_coarsen_pet(filepath: str, variable: str, target_res: float = 0.
             coarsen_kwargs["lon"] = lon_factor
         ds = ds.coarsen(**coarsen_kwargs, boundary="trim").mean()
 
-    # Resample to monthly starts
+    # Resample to monthly 
     ds = ds.resample(time="1MS").mean()
     return ds
 
 
-def process_concatenate_pet(filepaths: list, variable: str, output_zarr: str) -> xr.Dataset:
-    """Processes, concatenates monthly PET, computes stats/trend, and saves."""
+def process_concatenate_pet(filepaths, variable, output_zarr):
+  
     datasets = [process_and_coarsen_pet(fp, variable) for fp in filepaths]
     print("Concatenating PET datasets")
     combined = xr.concat(datasets, dim="time")
@@ -273,13 +269,13 @@ def process_concatenate_pet(filepaths: list, variable: str, output_zarr: str) ->
     return out
 
 
-def process_groundwater_file(filepath: str, variable: str = "WTD", target_res: float = 0.25) -> xr.Dataset:
+def process_groundwater_file(filepath, variable = "WTD", target_res = 0.25): 
     """Process one groundwater table depth file: coarsen and compute stats + trend."""
     print(f"Processing Groundwater: {filepath}")
     ds = xr.open_dataset(filepath, chunks={"lat": 100, "lon": 100})
     ds = ensure_lat_lon(ds)
 
-    # Coarsen to ~0.25°
+    # Coarsen 
     lat_step = float(abs(ds.lat[1] - ds.lat[0]))
     lon_step = float(abs(ds.lon[1] - ds.lon[0]))
     lat_factor = int(target_res / lat_step) if lat_step < target_res else 1
@@ -302,13 +298,13 @@ def process_groundwater_file(filepath: str, variable: str = "WTD", target_res: f
     std_ = ds[variable].std(dim="time")
 
     out = xr.Dataset({"mean": mean_, "std": std_, "monthly_trend": slope})
-    # Chunk fully per original choice
+  
     out = out.chunk({"lat": -1, "lon": -1})
     return out
 
 
-def harmonize_grid(datasets: list) -> list:
-    """Interpolate all datasets to 0.25° """
+def harmonize_grid(datasets):
+    """Interpolate all datasets to 0.25 """
     all_lats = np.concatenate([ds.lat.values for ds in datasets])
     all_lons = np.concatenate([ds.lon.values for ds in datasets])
 
@@ -323,7 +319,7 @@ def harmonize_grid(datasets: list) -> list:
     return regridded
 
 
-def enso_precip_correlation(enso_csv: str, precip_ds: xr.Dataset, precip_var: str = "tp") -> xr.Dataset:
+def enso_precip_correlation(enso_csv, precip_ds, precip_var = "tp"):
     """Compute correlation between monthly ENSO index and ERA5 precipitation."""
     print("Computing ENSO–precip correlation")
     enso_df = pd.read_csv(enso_csv, delimiter=";", header=None)
@@ -359,8 +355,8 @@ def enso_precip_correlation(enso_csv: str, precip_ds: xr.Dataset, precip_var: st
     return ds_out
 
 
-def asc_to_zarr(asc_file: str, out_zarr: str) -> xr.Dataset:
-    """Read an .asc grid with rasterio and save as zarr."""
+def asc_to_zarr(asc_file, out_zarr):
+    """Read .asc grid with rasterio and save as zarr."""
     print(f"Converting ASC to Zarr: {asc_file}")
     with rasterio.open(asc_file) as src:
         data = src.read(1)
@@ -387,8 +383,8 @@ def asc_to_zarr(asc_file: str, out_zarr: str) -> xr.Dataset:
     return ds
 
 
-def interpolate_to_quarter_degree(ds: xr.Dataset, lat_name: str = "lat", lon_name: str = "lon") -> xr.Dataset:
-    """Interpolate dataset to a 0.25° grid (centered)."""
+def interpolate_to_quarter_degree(ds, lat_name = "lat", lon_name = "lon"):
+
     lat_new = np.arange(90 - 0.25 / 2, -90, -0.25)
     lon_new = np.arange(-180 + 0.25 / 2, 180, 0.25)
     ds_interp = ds.interp({lat_name: lat_new, lon_name: lon_new}, method="linear")
@@ -397,19 +393,15 @@ def interpolate_to_quarter_degree(ds: xr.Dataset, lat_name: str = "lat", lon_nam
     return ds_interp
 
 
-def restructure_lulcc_geotiff_to_zarr(geotiff_path: str, out_zarr: str) -> xr.Dataset:
+def restructure_lulcc_geotiff_to_zarr(geotiff_path, out_zarr):
     """
     Write lulcc file to Zarr with variables 'category' and 'change'.
-    Also fixes an artifact region.
+    Also fixes weird artifact region.
     """
     print(f"Restructuring LULCC GeoTIFF: {geotiff_path}")
     ds = xr.open_dataset(geotiff_path, engine="rasterio")
 
-    # Variables are typically exposed as 'band_data' with dims ('band','y','x')
-    if "band_data" not in ds:
-        raise KeyError("Expected variable 'band_data' in GeoTIFF dataset.")
-
-    # Bounding box for artifact fix (lat 65..85, lon -100..5) on band=1 only
+    # Bounding box for weird artifact fix (lat 65..85, lon -100..5) on band=1 only
     lat_name = "y"
     lon_name = "x"
     mask = (ds[lat_name] >= 65) & (ds[lat_name] <= 85) & (ds[lon_name] >= -100) & (ds[lon_name] <= 5)
@@ -457,7 +449,7 @@ def calculate_aridity_index(out_zarr):
     mask_interp = ds_mask["lsm"].interp(lat=precip.lat, lon=precip.lon)
     precip = precip.where(mask_interp > 0.7)
 
-    # m/month → mm/month
+    # m/month to mm/month
     precip = precip * 1000.0
     precip = precip.drop_vars(["number", "step", "surface", "spatial_ref"], errors="ignore")
 
@@ -528,12 +520,11 @@ def calculate_aridity_index(out_zarr):
     return 
 
 
-# -----------------------------------------------------------------------------
-# Google Earth Engine sections
-# -----------------------------------------------------------------------------
+
+# Google Earth Engine bits
 
 def init_ee():
-    """Authenticate and initialize Earth Engine (interactive if needed)."""
+    """Authenticate and initialize Earth Engine ( if needed)."""
     import ee
     try:
         ee.Initialize()
@@ -727,9 +718,9 @@ def run_gee_fire():
     print("Started GEE export: Fire")
 
 
-# -----------------------------------------------------------------------------
+
 # Main
-# -----------------------------------------------------------------------------
+
 
 def main():
     # ERA5 temperature
@@ -756,7 +747,7 @@ def main():
         ds_evabs = open_grib_files(PATH_EVABS)
         process_and_datasets(ds_evabs, "evabs", str(OUT_DIR_FINAL / "driver_transpiration.zarr"))
 
-    # ERA5 wind: u10/v10 -> wind speed + direction
+    # ERA5 wind: u10/v10 to wind speed + direction
     if RUN_WIND:
         print("Processing ERA5 10m wind speed/direction")
         ds_u = open_grib_files(PATH_U10)
@@ -774,7 +765,7 @@ def main():
         process_and_datasets(ws_ds, "wind_speed", str(OUT_DIR_FINAL / "driver_wind_speed.zarr"))
         process_and_datasets(wd_ds, "wind_dir", str(OUT_DIR_FINAL / "driver_wind_dir.zarr"))
 
-    # PET processing (daily NetCDFs -> monthly concatenation -> stats + trend)
+    # PET processing (daily NetCDFs to monthly concatenation to stats + trend)
     if RUN_PET and PET_FILES:
         print("Processing PET (daily NetCDFs -> monthly stats)")
         with dask.config.set(scheduler="threads"):

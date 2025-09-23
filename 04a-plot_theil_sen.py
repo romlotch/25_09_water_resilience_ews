@@ -23,22 +23,19 @@ Inputs:
   --auto_range   : if set (default), pick symmetric vmin/vmax from robust quantiles
   --q            : quantile for auto_range (default 0.995)
 
-Examples:
+E.g.:
   python 04a-plot_theil_sen.py \
     --dataset_path '/mnt/data/romi/output/paper_1/output_sm_final/out_sm_ts.zarr' \
     --variable 'sm' \
     --output_path '/mnt/data/romi/figures/paper_1/supplementary_final/supp_3' \
     --sig_only
 
-Notes:
-- As requested, there is **no land mask step** even for precipitation.
 """
 
 SUFFIXES = ["ac1", "std", "skew", "kurt", "fd"]
 LABELS   = ["AC1", "SD", "Skew.", "Kurt.", "FD"]
 
-def open_source_ds(path: str) -> xr.Dataset:
-    # Open Zarr directory or NetCDF file transparently
+def open_source_ds(path):
     if os.path.isdir(path) and (
         os.path.exists(os.path.join(path, ".zgroup")) or
         os.path.exists(os.path.join(path, ".zmetadata"))
@@ -46,8 +43,8 @@ def open_source_ds(path: str) -> xr.Dataset:
         return xr.open_zarr(path)
     return xr.open_dataset(path)
 
-def robust_sym_limits(da: xr.DataArray, q: float = 0.995) -> tuple[float, float]:
-    """Symmetric limits around 0 using |da| quantile."""
+def robust_sym_limits(da, q = 0.995):
+    """Symmetric limits around 0 for plotting."""
     try:
         a = float(np.abs(da).quantile(q, skipna=True))
     except Exception:
@@ -59,11 +56,12 @@ def robust_sym_limits(da: xr.DataArray, q: float = 0.995) -> tuple[float, float]
         a = 1.0
     return -a, a
 
-def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
-                  sig_only: bool = False, auto_range: bool = True, q: float = 0.995):
+def plot_theilsen(ds, var_name, out_dir,
+                  sig_only = False, auto_range = True, q= 0.995):
+    
     os.makedirs(out_dir, exist_ok=True)
 
-    # Build list of slope variables to plot, in your usual order
+    # Build list of slope variables to plot
     to_plot = []
     for suf, lab in zip(SUFFIXES, LABELS):
         vname = f"{var_name}_{suf}_ts"
@@ -75,7 +73,7 @@ def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
     if not to_plot:
         raise RuntimeError("No Theil–Sen slope variables found for given prefix.")
 
-    # Optional mask: only significant slopes (CI excludes 0)
+    # PLot only significant slopes (CI excludes 0) if true
     if sig_only:
         for i, (da, lab, suf) in enumerate(to_plot):
             sig_name = f"{var_name}_{suf}_ts_sig"
@@ -84,10 +82,10 @@ def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
             else:
                 print(f"[warn] Missing significance var {sig_name}; cannot mask {lab}.")
 
-    # Colormap
+    # Cmap
     cmap = sn.color_palette("RdBu_r", as_cmap=True)
 
-    # --- Manual ranges  ---
+    # Manual ranges
     # # soil moisture 
     # vmins = [-0.05, -0.01, -0.5, -2.0, -0.02]
     # vmaxs = [ 0.05,  0.01,  0.5,  2.0,  0.02]
@@ -103,7 +101,6 @@ def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
         if auto_range:
             vmin, vmax = robust_sym_limits(da, q=q)
         else:
-            # If you uncomment fixed arrays above, replace the next two lines accordingly:
             vmin, vmax = robust_sym_limits(da, q=q)
 
         # Figure
@@ -123,15 +120,15 @@ def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
         )
 
         ax.gridlines(color='black', alpha=0.5, linestyle='--', linewidth=0.5)
-        ax.set_title("")  # keep clean
+        ax.set_title("")  
         ax.set_xlabel(""); ax.set_ylabel("")
         ax.xaxis.set_ticks([]); ax.yaxis.set_ticks([])
 
-        # Colorbar (per-figure)
+        # Cbar
         cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
         cbar.set_label(f"{label} slope (per year)")
 
-        # Save map
+        # Save
         base = f"{var_name}_ts_{label.lower()}"
         if sig_only:
             base += "_sig"
@@ -139,7 +136,7 @@ def plot_theilsen(ds: xr.Dataset, var_name: str, out_dir: str,
         plt.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        # Save a standalone colorbar (SVG)
+        # Save a cbar
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))
         norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
         cb1 = plt.colorbar(

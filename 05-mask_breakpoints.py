@@ -65,7 +65,7 @@ def mask_breakpoints(ews_ds, var_name, ds_breaks, output_dir):
         # Initialize output 
         out = np.full(cp.shape, np.datetime64('NaT'), dtype='datetime64[ns]')
 
-        # Valid where 0 ≤ cp < len(time)
+        # Valid where 0 < cp < len(time)
         valid = (cp >= 0) & (cp < times.size)
         out[valid] = times[cp[valid]]
 
@@ -83,7 +83,6 @@ def mask_breakpoints(ews_ds, var_name, ds_breaks, output_dir):
     t0 = pd.to_datetime(ews_ds['time'].values[0])
     t_thresh = t0 + pd.DateOffset(years=12)
     t_thresh = np.datetime64(t_thresh)
-
 
     ## extract time of bp
     bp_time_pettitt = break_times(ds_breaks['pettitt_cp'])
@@ -124,17 +123,14 @@ def mask_breakpoints(ews_ds, var_name, ds_breaks, output_dir):
     ds_masked_var.to_zarr(f'{output_dir}/{var_name}_cp_masked_var.zarr', mode = 'w')
 
 
-
 def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_years= 12, seed = 42, outfile_suffix = "neg"):
     """
     Create a negatives-only masked dataset by trimming each negative pixel to a
     fake break sampled from the global distribution of positive break times.
-    Saves to: {output_dir}/{var_name}_cp_masked_{outfile_suffix}.zarr
     """
     rng  = np.random.RandomState(seed)
-    time = ews_ds["time"].values  # 1D numpy datetime64 array
+    time = ews_ds["time"].values 
 
-    # --- local helper: index -> time (same idea as your break_times)
     def _idx_to_time(cp_idx_da: xr.DataArray) -> xr.DataArray:
         cp = cp_idx_da.values.astype(int)
         out = np.full(cp.shape, np.datetime64("NaT"), dtype="datetime64[ns]")
@@ -142,7 +138,7 @@ def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_ye
         out[valid] = time[cp[valid]]
         return xr.DataArray(out, dims=cp_idx_da.dims, coords=cp_idx_da.coords)
 
-    # --- significance and break times per test (matches your logic)
+    ## Mask significant piuxels
     pettitt_sig = (ds_breaks["pettitt_pval"] < alpha) & (ds_breaks["pettitt_cp"] > 0)
     stc_sig     = (ds_breaks["Fstat_pval"]   < alpha) & (ds_breaks["strucchange_bp"] > 0)
     var_sig     = (ds_breaks["pval_var"]     < alpha) & (ds_breaks["bp_var"] > 0)
@@ -151,7 +147,7 @@ def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_ye
     bt_stc     = _idx_to_time(ds_breaks["strucchange_bp"])
     bt_var     = _idx_to_time(ds_breaks["bp_var"])
 
-    # late-enough threshold (e.g., 12 years after start)
+    # late-enough threshold 
     t0 = pd.to_datetime(time[0])
     t_thresh = np.datetime64(t0 + pd.DateOffset(years=min_years))
 
@@ -159,7 +155,6 @@ def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_ye
     stc_pos     = stc_sig     & (bt_stc     >= t_thresh)
     var_pos     = var_sig     & (bt_var     >= t_thresh)
 
-    # combined "all": earliest valid break time among tests
     bt_all = xr.concat(
         [bt_pettitt.where(pettitt_pos),
          bt_stc.where(stc_pos),
@@ -168,10 +163,9 @@ def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_ye
     ).min(dim="band")
     all_pos = (pettitt_pos | stc_pos | var_pos) & bt_all.notnull()
 
-    # negatives = has data but NOT positive (per test)
+    # negatives = has data but NOT positive
     have_data = ews_ds[var_name].notnull().any(dim="time")
 
-    # bundle per-test configs
     tests = [
         ("pettitt", pettitt_pos, bt_pettitt),
         ("stc",     stc_pos,     bt_stc),
@@ -182,25 +176,25 @@ def mask_negatives(ews_ds, var_name, ds_breaks, output_dir, alpha = 0.05, min_ye
     for label, pos_mask, bt in tests:
         neg_mask = have_data & (~pos_mask)
 
-        # pool of positive break times for this test
+        # pool of positive break times for the test 
         pool_times = bt.where(pos_mask).values.ravel()
-        pool_times = pool_times[~np.isnat(pool_times)]           # drop NaT
-        pool_times = pool_times[pool_times >= t_thresh]          # enforce history
+        pool_times = pool_times[~np.isnat(pool_times)]           
+        pool_times = pool_times[pool_times >= t_thresh]        
 
-        # fallback if pool empty: pick a reasonable index on the time grid
+        # if theres nothing in the pool pick a reasonable index on the time grid
         if pool_times.size == 0:
             earliest_idx = int(np.searchsorted(time, t_thresh, side="left"))
             fallback_idx = max(earliest_idx, min(int(len(time) * 0.7), len(time) - 1))
             pool_times = np.array([time[fallback_idx]], dtype=time.dtype)
 
-        # sample a pseudo-break time for each negative pixel
+        # sample a fake-break time for each negative pixel
         pseudo_time = xr.full_like(neg_mask, fill_value=np.datetime64("NaT"), dtype="datetime64[ns]")
         ii, jj = np.where(neg_mask.values)
         if ii.size > 0:
             choices = rng.choice(pool_times, size=ii.size, replace=True)
             pseudo_time.values[ii, jj] = choices
 
-        # trim negatives to time ≤ pseudo-break (positives remain NaN in this file)
+        # trim negatives to only the time before the pseudo-break 
         tcoord = ews_ds["time"]
         time_mask_neg = tcoord <= pseudo_time
         sm_neg = ews_ds[[var_name]].where(neg_mask)
@@ -244,7 +238,7 @@ def main():
         mask = ds_mask["lsm"] > 0.7
         ews_ds = ews_ds.where(mask)
 
-    # mask_breakpoints(ews_ds, var_name, ds_breaks, output_dir)
+    mask_breakpoints(ews_ds, var_name, ds_breaks, output_dir)
     mask_negatives(ews_ds, var_name, ds_breaks, output_dir)
 
 

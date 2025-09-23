@@ -6,15 +6,28 @@ import xarray as xr
 from statsmodels.tsa.seasonal import STL
 
 
-#!/usr/bin/env python3
-import os
-import argparse
-import numpy as np
-import pandas as pd
-import xarray as xr
-from statsmodels.tsa.seasonal import STL
+""" 
+Run a simple sensitivity analysis that tests effect of temporal aggregation, 
+window size, and some detrending parameters (robust STL and including diff or not)
+on a tile.
 
-# ========= helpers to open & prep =========
+Inputs: 
+    --dataset: ews output to run the sensitivity on (uses the raw data variable that is still in the file)
+    --variable: variable name
+    --outdir: specify the output dir
+    --i0, i1, j0, j1: indices to slice a tile 
+    --eps: optionally specify tolerance for when delta is 0 
+
+python3 01c-sensitivity.py \
+            --dataset /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr \
+            --variable precip \
+            --outdir /mnt/data/romi/output/paper_1/output_precip_final \
+            --i0 270 --i1 320 --j0 470 --j1 520: indices to slice out the tile (currently in SA)
+            
+            
+"""
+
+# --- helpers ---
 
 def open_source_ds(path):
     if os.path.isdir(path) and (os.path.exists(os.path.join(path, ".zgroup"))
@@ -61,13 +74,13 @@ def steps_per_year_from_times(times):
 
 def stl_period_for(times):
     steps = steps_per_year_from_times(times)
-    # for weekly data steps ≈ 52; monthly ≈ 12; daily ≈ 365
+    # for weekly data steps = 52; monthly = 12; daily = 365 approx
     return steps
 
 def make_odd(n: int) -> int:
     return n if (n % 2 == 1) else (n + 1)
 
-# ========= STL detrend =========
+# --- STL detrend ---
 
 def stl_residual(values, times, period, robust=True, fill="mean"):
     if np.all(np.isnan(values)):
@@ -88,9 +101,9 @@ def stl_residual(values, times, period, robust=True, fill="mean"):
     res[ts.isna()] = np.nan
     return res.values
 
-# ========= rolling EWS =========
+# --- rolling EWS ---
 
-def rolling_ews_centered(ts: np.ndarray, window: int):
+def rolling_ews_centered(ts, window):
     n = len(ts); half = window//2
     out = [np.full(n, np.nan) for _ in range(5)]  # ac1, sd, skew, kurt, fd
     for k in range(half, n-half):
@@ -130,14 +143,14 @@ def deltas_from_series(arr3, stat_name):
         delta = sign * (mx - mn)
     return delta
 
-# ========= sign-first metrics (UNWEIGHTED) =========
+# --- sign-first metrics ---
 
-def sign_map(delta_da: xr.DataArray, eps: float = 0.0) -> xr.DataArray:
-    """Map Δ to {-1,0,1} with tolerance eps."""
+def sign_map(delta_da, eps: float = 0.0):
+    """Map delta to {-1,0,1} with tolerance eps."""
     return xr.where(delta_da > eps, 1,
            xr.where(delta_da < -eps, -1, 0)).astype(np.int8)
 
-def sign_prevalence(delta_da: xr.DataArray, eps: float = 0.0) -> dict:
+def sign_prevalence(delta_da, eps: float = 0.0):
     """Unweighted % up / % down / % neutral and dominance (%up - %down)."""
     valid = np.isfinite(delta_da)
     N = int(valid.sum())
@@ -149,21 +162,17 @@ def sign_prevalence(delta_da: xr.DataArray, eps: float = 0.0) -> dict:
     dom  = up - down
     return {"pct_up": up, "pct_down": down, "pct_neutral": neu, "dom": dom}
 
-# ========= core compute for a tile =========
+# --- core compute for a tile ---
 
 def compute_ews_for_tile(raw3, times, freq, years_window,
                          do_diff=True, stl_robust=True, fill="mean"):
     """
-    raw3: np.ndarray (time, lat, lon) of the base variable
-    times: pandas-compatible datetime index/array
-    freq: 'D' | 'W' | 'MS' (used only for naming; STL period inferred from times)
-    years_window: float (e.g., 2.5, 5, 10)
-    do_diff: first-difference before EWS
+    freq: 'D', 'W', 'MS'
+    years_window: 2.5, 5, 10
+    do_diff: first-difference before EWS?
     stl_robust: robust STL on/off
-    fill: 'mean'|'linear' fill inside STL
     """
     nt, nlat, nlon = raw3.shape
-    # BUGFIX: infer STL period from times, not from freq string
     period = stl_period_for(times)
 
     # STL residual per pixel
@@ -173,7 +182,7 @@ def compute_ews_for_tile(raw3, times, freq, years_window,
         resid[:, i] = stl_residual(flat[:, i], times, period=period, robust=stl_robust, fill=fill)
     resid3 = resid.reshape(nt, nlat, nlon)
 
-    # First difference (optional)
+    # First difference 
     if do_diff:
         detr = np.empty_like(resid3)
         detr[0] = np.nan
@@ -181,11 +190,10 @@ def compute_ews_for_tile(raw3, times, freq, years_window,
     else:
         detr = resid3.copy()
 
-    # Rolling window in steps, centered
+    # Rolling window in steps
     steps = steps_per_year_from_times(times)
     win   = make_odd(int(round(years_window * steps)))
     if win >= len(times):
-        # shrink to a safe size (80% of length, odd)
         win = make_odd(min(len(times) - 1, int(round(0.8 * len(times)))))
 
     ac1_list, sd_list, skew_list, kurt_list, fd_list = [], [], [], [], []
@@ -224,7 +232,7 @@ def compute_ews_for_tile(raw3, times, freq, years_window,
     coords = {"time": times, "lat": np.arange(nlat), "lon": np.arange(nlon)}
     return xr.Dataset(data_vars, coords=coords)
 
-# ========= tile I/O =========
+# --- tile ---
 
 def load_tile(dataset_path, variable, freq_resample, i0, i1, j0, j1,
               t0="2000-01-01", t1="2023-12-31"):
@@ -248,9 +256,9 @@ def safe_name(cfg):
     tag = f"freq{cfg['freq']}_win{cfg['win_years']}y_diff{int(cfg['diff'])}_stl{'R' if cfg['stl_robust'] else 'N'}"
     return tag.replace(".","p")
 
-# ========= sensitivity runner =========
+# --- sensitivity runner--- 
 
-def summarize_signs(ds_out: xr.Dataset, eps=0.0, prefix=""):
+def summarize_signs(ds_out, eps=0.0, prefix=""):
     out = {}
     for key, label in [("delta_ac1","AC1"), ("delta_std","SD"),
                        ("delta_skew","Skew"), ("delta_kurt","Kurt"), ("delta_fd","FD")]:
@@ -323,7 +331,6 @@ def run_sensitivity(dataset, variable, outdir,
     df.to_csv(csv_path, index=False)
     print(f"[DONE] Summary saved → {csv_path}")
 
-# ========= CLI =========
 
 def main():
     ap = argparse.ArgumentParser(description="Sensitivity analysis on a single tile (sign-first + magnitudes).")
@@ -334,7 +341,7 @@ def main():
     ap.add_argument("--i1", type=int, default=50, help="lat end index (exclusive)")
     ap.add_argument("--j0", type=int, default=0, help="lon start index (inclusive)")
     ap.add_argument("--j1", type=int, default=50, help="lon end index (exclusive)")
-    ap.add_argument("--eps_sign", type=float, default=0.0, help="tolerance for sign neutral (|Δ| <= eps -> 0)")
+    ap.add_argument("--eps_sign", type=float, default=0.0, help="tolerance for sign neutral (|delta| <= eps -> 0)")
     args = ap.parse_args()
 
     run_sensitivity(args.dataset, args.variable, args.outdir,

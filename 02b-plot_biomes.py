@@ -21,7 +21,7 @@ E.g.
  
 """
 
-# ---------------- CLI ----------------
+# --- CLI ---
 def parse_args():
     ap = argparse.ArgumentParser(
         description="Grouped biome stacked bars (Decrease/Neutral/Increase) per indicator."
@@ -33,7 +33,7 @@ def parse_args():
                     help="Plot raw indicators (5 panels) or composite signals (5 panels).")
     return ap.parse_args()
 
-# ---------------- Data & helpers  ----------------
+# --- Data & helpers ---
 TNC_SHP = "/mnt/data/romi/data/terr-ecoregions-TNC/tnc_terr_ecoregions.shp"
 
 
@@ -125,10 +125,10 @@ from collections import OrderedDict
 def combined_family_masks(ds, prefix):
     """
     Families of combined signals with both directions in the same family:
-      - AC1 & SD: Both ↑, Mixed (one up one down), Both ↓
-      - Fractal dimension: FD ↑, FD ↓
-      - Flickering: Skew↑ & Kurt↑, Skew↓ & Kurt↓
-    All components must be significant at p < 0.05.
+      - AC1 & SD: Both up, Mixed (one up one down), Both down
+      - Fractal dimension: FD up, FD down
+      - Flickering: Skew up & Kurt up, Skew down & Kurt down
+    All must be significant at p < 0.05.
     """
     ac1  = ds[f"{prefix}_ac1_kt"];  ac1_p  = ds[f"{prefix}_ac1_pval"]
     std  = ds[f"{prefix}_std_kt"];  std_p  = ds[f"{prefix}_std_pval"]
@@ -155,17 +155,17 @@ def combined_family_masks(ds, prefix):
 
     return OrderedDict([
         ("AC1 & SD", OrderedDict([
-            ("Both ↑ (AC1↑ & SD↑)", both_up),
+            ("Both up (AC1 up & SD up)", both_up),
             ("Mixed (one up, one down)", mixed),
-            ("Both ↓ (AC1↓ & SD↓)", both_down),
+            ("Both down (AC1 down & SD down)", both_down),
         ])),
         ("Fractal dimension", OrderedDict([
-            ("FD ↑", fd_up),
-            ("FD ↓", fd_down),
+            ("FD up", fd_up),
+            ("FD down", fd_down),
         ])),
         ("Flickering (Skew & Kurt)", OrderedDict([
-            ("Skew↑ & Kurt↑", flick_up),
-            ("Skew↓ & Kurt↓", flick_down),
+            ("Skew up & Kurt up", flick_up),
+            ("Skew down & Kurt down", flick_down),
         ])),
     ])
 
@@ -194,21 +194,21 @@ def clip_da(da, gdf):
 
 
 def get_area_grid(lat, dlon=0.25, dlat=0.25):
-    """1D lat band area (km²) for each latitude, matching your notebook."""
+    """1D lat band area (km2) for each latitude, matching your notebook."""
     R = 6371  # km
     lat_rad = np.radians(lat)
     dlat_rad = np.radians(dlat)
     dlon_rad = np.radians(dlon)
     return (R**2) * dlat_rad * dlon_rad * np.cos(lat_rad)
 
-def area_da_for(clipped_ds: xr.Dataset) -> xr.DataArray:
-    """Broadcast that 1D area to 2D (lat, lon), exactly like the notebook."""
+def area_da_for(clipped_ds):
+    """Broadcast that 1D area to 2D"""
     latitudes = clipped_ds['lat'].values
     area_per_lat = get_area_grid(latitudes)
     area_grid = np.broadcast_to(area_per_lat[:, np.newaxis], (latitudes.size, clipped_ds['lon'].size))
     return xr.DataArray(area_grid, coords={'lat': latitudes, 'lon': clipped_ds['lon'].values}, dims=('lat', 'lon'))
 
-def tri_split_areas(kt: xr.DataArray, pval: xr.DataArray, area_da: xr.DataArray):
+def tri_split_areas(kt, pval, area_da):
     valid = kt.notnull()
     total = float(area_da.where(valid).sum().values) if valid.any() else 0.0
     if total == 0.0:
@@ -225,11 +225,11 @@ def tri_split_areas(kt: xr.DataArray, pval: xr.DataArray, area_da: xr.DataArray)
 def combined_signal_masks(ds, prefix):
     """
     Return dict[str -> xr.DataArray(bool)] for:
-      - CSD: AC1↑ & SD↑
-      - CSU: AC1↓ & SD↓
-      - Mixed: (AC1↑ & SD↓) | (AC1↓ & SD↑)
-      - FD↓: FD↓
-      - Flickering: Skew↑ & Kurt↑
+      - CSD: AC1 up & SD up
+      - CSU: AC1 down & SD down
+      - Mixed: (AC1 up & SD down) | (AC1 down & SD up)
+      - FD: FD down
+      - Flickering: Skew up & Kurt up
     All directions must be significant at p < 0.05.
     """
     ac1  = ds[f"{prefix}_ac1_kt"];  ac1_p  = ds[f"{prefix}_ac1_pval"]
@@ -250,11 +250,11 @@ def combined_signal_masks(ds, prefix):
     Flicker   = (sig(skew_p) & (skew > 0)) & (sig(kurt_p) & (kurt > 0))
 
     return {
-        "CSD (AC1↑ & SD↑)": CSD,
-        "CSU (AC1↓ & SD↓)": CSU,
-        "Mixed (AC1↕ & SD↕)": Mixed,
-        "FD↓": FDdecline,
-        "Flickering (Skew↑ & Kurt↑)": Flicker,
+        "CSD (AC1 up & SD up)": CSD,
+        "CSU (AC1 down & SD down)": CSU,
+        "Mixed (AC1 updown & SD updown)": Mixed,
+        "FD down": FDdecline,
+        "Flickering (Skew up & Kurt up)": Flicker,
     }
 
 # ---------------- Main ----------------
@@ -262,7 +262,7 @@ def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    # dataset + masks (hardcoded paths exactly like your cells)
+    # dataset + masks (
     ds = xr.open_dataset(args.dataset)
     urban_mask = xr.open_dataset('/mnt/data/romi/data/urban_mask.zarr')
     crop_mask  = xr.open_dataset('/mnt/data/romi/data/crop_mask.zarr')
@@ -279,7 +279,7 @@ def main():
     prefix = args.var  # e.g., "sm", "Et", "precip"
 
     IRRIG_PATH = "/mnt/data/romi/data/driver_analysis/global_irrigated_areas.zarr"
-    IRRIG_THRESH_PERCENT = 60.0  # AEI ≥ 60% => considered irrigated (excluded from Cropland pseudo-biome)
+    IRRIG_THRESH_PERCENT = 60.0  # AEI > 60% => considered irrigated and excluded from cropland biome
 
     irrig_ds = xr.open_dataset(IRRIG_PATH).rio.write_crs("EPSG:4326").interp_like(ds, method="nearest")
     if len(irrig_ds.data_vars) == 0:
@@ -291,14 +291,13 @@ def main():
         _vmax = 1.0
     irrig_frac = _irrig_da / 100.0 if _vmax > 1.5 else _irrig_da
 
-    # base cropland mask (as in your script)
+    # base cropland mask 
     crop_only = (crop_mask > 25) & ((urban_mask <= 3) | urban_mask.isnull())
 
-    # --- NEW: rain-fed cropland (what we will use for the Cropland pseudo-biome in FAMILIES) ---
+    # --- rain-fed cropland (what we will use for the cropland biome) ---
     irrigated = (irrig_frac >= IRRIG_THRESH_PERCENT / 100.0)
     rainfed_cropland = crop_only & (~irrigated | irrigated.isnull())
         
-    
     
     if args.mode == "indicators":
         # ---------- INDIVIDUAL INDICATORS  ----------
@@ -406,7 +405,7 @@ def main():
         return
 
 
-    # ---------- COMBINED SIGNALS (single panels per family; % of total biome land area) ----------
+    # --- COMBINED SIGNALS (single panels % of total biome land area) ---
     families = combined_family_masks(ds, prefix)
 
     # Land-sea mask for denominators
@@ -416,7 +415,7 @@ def main():
     lsm = lsm.interp_like(ds, method="nearest")
     land = (lsm["lsm"] > 0.5) | lsm["lsm"].isnull()
 
-    # Area grid (assumes ~regular)
+    # Area grid 
     lat = ds["lat"].values
     lon = ds["lon"].values
     dlat = float(np.abs(np.diff(lat).mean())) if lat.size > 1 else 0.25
@@ -437,14 +436,14 @@ def main():
     non_urban  = (urban_mask <= 3) | urban_mask.isnull()
     crop_only  = (crop_mask > 25) & ((urban_mask <= 3) | urban_mask.isnull())
 
-    # Helper: biome raster mask on ds grid using any ds var
+    # biome raster mask on ds grid using
     sample_da = ds[f"{prefix}_ac1_kt"]
     def biome_mask_from_gdf(gdf):
         clipped = clip_da(sample_da, gdf)
         clipped = clipped.interp_like(sample_da, method="nearest")
         return clipped.notnull()
 
-    # Accumulators: per family → per group → {den, per-category areas}
+    # Accumulate
     family_acc = {}
     for fam_name, cats in families.items():
         family_acc[fam_name] = {
@@ -452,9 +451,8 @@ def main():
             for g in groups_plot
         }
 
-    # Natural groups (exclude cropland from denom; apply non-urban & non-crop in numerators)
     for biome in BIOMES:
-        if biome == "Mangroves":  # excluded like before
+        if biome == "Mangroves":  # excluded 
             continue
         grp = GROUP_MAP.get(biome)
         if grp is None:
@@ -463,13 +461,13 @@ def main():
         gdf, _ = get_biomes(biome)
         bmask = biome_mask_from_gdf(gdf)
 
-        # denominator = land ∧ biome ∧ not cropland (we do not remove urban here, to match your earlier choice)
+        
         denom_mask = land & bmask & (~crop_only)
         denom_area = float(area_da.where(denom_mask).sum().values)
         if denom_area == 0.0:
             continue
 
-        # numerator valid window: terrestrial, biome, non-urban, not cropland
+        # terrestrial, biome, non-urban, not cropland
         valid_num_mask = land & bmask & non_urban & (~crop_only)
 
         for fam_name, cats in families.items():
@@ -489,7 +487,6 @@ def main():
             hit_area = float(area_da.where(land & crop_only & non_urban & cat_mask).sum().values)
             family_acc[fam_name][grp]["cats"][cat_name] += hit_area
 
-    # Build DataFrames: each family becomes a wide DF with columns per category
     family_dfs = {}
     for fam_name, cats in families.items():
         rows = []
@@ -507,11 +504,10 @@ def main():
         df = df.sort_values("Group")
         family_dfs[fam_name] = df
 
-    # ---- Plot: three panels (AC1&SD, FD, Flicker), each stacked like your indicator plots ----
+    # --- Plot ---
     sn.set_style("whitegrid")
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
-    # Consistent color idea: "↑" = red, "↓" = blue, "Mixed" = grey
     RED   = "#cd5d5dff"
     BLUE  = "#64afc9ff"
     GREY  = "#bab9b9"
@@ -535,7 +531,7 @@ def main():
 
     for ax, fam_name in zip(axes, family_order):
         dfp = family_dfs[fam_name].copy()
-        cat_names = list(families[fam_name].keys())  # preserves order defined above
+        cat_names = list(families[fam_name].keys())  # preserves order 
 
         left = np.zeros(len(dfp))
         for cn in cat_names:
@@ -560,7 +556,6 @@ def main():
         ax.tick_params(axis="y", labelsize=12)
         sn.despine(ax=ax, top=True, right=True, bottom=True, left=True)
         ax.margins(y=0.02)
-        # single legend per panel (optional; comment out if you prefer a single global legend)
         ax.legend(frameon=False, fontsize=9, loc="lower right")
 
     plt.tight_layout()
@@ -593,7 +588,6 @@ def main():
     out_csv_tidy = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families_tidy.csv")
     comb_tidy.to_csv(out_csv_tidy, index=False)
     print(f"Saved combined-family percentages (tidy) to: {out_csv_tidy}")
-
 
 
 if __name__ == "__main__":

@@ -50,7 +50,6 @@ E.g.
 
 # --- Hardcoded biome bits --- 
 
-# ---------------- Data & helpers  ----------------
 TNC_SHP = "/mnt/data/romi/data/terr-ecoregions-TNC/tnc_terr_ecoregions.shp"
 
 BIOMES = [
@@ -161,7 +160,7 @@ def wrap_to_180(ds, lon_name="lon"):
     return ds
 
 def apply_land_mask_if_precip(ds_breaks, ds_ews, var_name, lon_name, lat_name):
-    """If var is 'precip', apply land-sea mask (lsm > 0.7) to BOTH datasets so they remain consistent."""
+    """If var is 'precip', apply land-sea mask (lsm > 0.7) to BOTH! datasets so theyre consistent."""
     if var_name != "precip":
         return ds_breaks, ds_ews
 
@@ -216,7 +215,7 @@ def class_colors_norm():
     return colors, cmap, norm
 
 
-# --- Maps + global bar plots ---
+# --- Maps and global bar plots ---
 
 CLASS_LABELS = {1: 'TP', 2: 'FP', 3: 'FN', 4: 'TN'}
 CLASS_COLORS = {1: '#7d475dff', 2: '#ffeaefff', 3: '#e9e2bcff', 4: '#2c787eff'}
@@ -400,7 +399,6 @@ def clip_biomes(ds, gdf):
 
 
 def get_area_grid(lat, dlon=0.25, dlat=0.25):
-    """1D lat band area (km²) for each latitude (approx; matches your notebook)."""
     R = 6371  # km
     lat_rad = np.radians(lat)
     dlat_rad = np.radians(dlat)
@@ -427,11 +425,7 @@ def _prepare_urban_crop_masks_like(ds_like):
 
 
 def _biome_group_iter(ds_base, urban_mask, crop_mask):
-    """
-    Yield tuples of (group_label, clipped_dataset) over grouped natural biomes,
-    then 'Cropland' as a pseudo‑biome (>=25% crops and <=3% urban).
-    Excludes mangroves and flooded grasslands by your mapping.
-    """
+   
     # Natural biomes
     for biome in BIOMES:
         if biome == "Mangroves":
@@ -457,7 +451,7 @@ def _biome_group_iter(ds_base, urban_mask, crop_mask):
 
 
 def _counts_from_masks_area(e_mask, b_mask, area_da):
-    """Area‑weighted counts for TP/FP/FN/TN in km²; returns floats."""
+    """Area‑weighted counts for TP/FP/FN/TN in km2; returns floats."""
     TP, FP, FN, TN = compute_confusion_arrays(e_mask, b_mask)
     TP_a = float(area_da.where(TP).sum().values)
     FP_a = float(area_da.where(FP).sum().values)
@@ -481,18 +475,18 @@ def _biome_confusion_fraction_table(ds_breaks, ds_ews, var_name, which="indicato
         return m.fillna(False)
 
     composites = {
-        'AC1 ↑ & SD ↑':   lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'inc') &
+        'AC1 up & SD up':   lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'inc') &
                                          ews_dir_mask_local(ds_loc, f'{var_name}_std', 'inc'),
-        'AC1 ↓ & SD ↓':   lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'dec') &
+        'AC1 down & SD down':   lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'dec') &
                                          ews_dir_mask_local(ds_loc, f'{var_name}_std', 'dec'),
-        'AC1 ↑↓ & SD ↑↓': lambda ds_loc: (
+        'AC1 updown & SD updown': lambda ds_loc: (
             ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'inc') & ews_dir_mask_local(ds_loc, f'{var_name}_std', 'dec')
         ) | (
             ews_dir_mask_local(ds_loc, f'{var_name}_ac1', 'dec') & ews_dir_mask_local(ds_loc, f'{var_name}_std', 'inc')
         ),
-        'Skew ↑ & Kurt ↑': lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_skew', 'inc') &
+        'Skew up & Kurt up': lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_skew', 'inc') &
                                           ews_dir_mask_local(ds_loc, f'{var_name}_kurt', 'inc'),
-        'FD ↓':            lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_fd', 'dec'),
+        'FD down':            lambda ds_loc: ews_dir_mask_local(ds_loc, f'{var_name}_fd', 'dec'),
     }
 
     urban_mask, crop_mask = _prepare_urban_crop_masks_like(ds_ews)
@@ -507,10 +501,10 @@ def _biome_confusion_fraction_table(ds_breaks, ds_ews, var_name, which="indicato
         if which == "indicators":
             label_iter = [f'{var_name}_{k}' for k, _ in INDICATORS_META]
         else:
-            label_iter = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+            label_iter = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
 
         for label in label_iter:
-            # Indicator or composite mask
+            # Indicator or EWS mask
             if which == "indicators":
                 tau = clipped[f'{label}_kt']; p = clipped[f'{label}_pval']
                 base = (p < 0.05) & tau.notnull()
@@ -553,10 +547,7 @@ def _indicator_pretty_name(full_var: str) -> str:
     return lookup.get(suffix, suffix.upper())
 
 def plot_biome_confusion_rows(df_long, var_name, out_dir, which="indicators"):
-    """
-    Make 1×5 stacked horizontal bar figures per method, across biome groups.
-    One figure for indicators and one for composites (controlled by 'which').
-    """
+    
     colors = {'TP': '#7d475dff', 'FP': '#ffeaefff', 'FN': '#e9e2bcff', 'TN': '#2c787eff'}
     classes = ['TP', 'FP', 'FN', 'TN']
 
@@ -566,7 +557,7 @@ def plot_biome_confusion_rows(df_long, var_name, out_dir, which="indicators"):
         titles       = [_indicator_pretty_name(lab) for lab in labels_order]
         fig_tag      = "indicators"
     else:
-        labels_order = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+        labels_order = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
         titles       = labels_order
         fig_tag      = "ews"
 
@@ -695,17 +686,17 @@ def plot_map_ews(ds_breaks, ds_ews, var_name, out_dir):
         return m.where(land_mask, False).fillna(False)
 
     composites = {
-        'ac1_std_inc': ('AC1 ↑ & SD ↑',
+        'ac1_std_inc': ('AC1 up & SD up',
             lambda ds: ews_dir_mask(ds, f'{var_name}_ac1', 'inc') & ews_dir_mask(ds, f'{var_name}_std', 'inc')),
-        'ac1_std_dec': ('AC1 ↓ & SD ↓',
+        'ac1_std_dec': ('AC1 down & SD down',
             lambda ds: ews_dir_mask(ds, f'{var_name}_ac1', 'dec') & ews_dir_mask(ds, f'{var_name}_std', 'dec')),
-        'ac1_std_mixed': ('AC1 ↑↓ & SD ↑↓', lambda ds: (
+        'ac1_std_mixed': ('AC1 updown & SD updown', lambda ds: (
             (ews_dir_mask(ds, f'{var_name}_ac1', 'inc') & ews_dir_mask(ds, f'{var_name}_std', 'dec')) |
             (ews_dir_mask(ds, f'{var_name}_ac1', 'dec') & ews_dir_mask(ds, f'{var_name}_std', 'inc'))
         )),
-        'skew_kurt_inc': ('Skew ↑ & Kurt ↑',
+        'skew_kurt_inc': ('Skew up & Kurt up',
             lambda ds: ews_dir_mask(ds, f'{var_name}_skew', 'inc') & ews_dir_mask(ds, f'{var_name}_kurt', 'inc')),
-        'fd_dec': ('FD ↓', lambda ds: ews_dir_mask(ds, f'{var_name}_fd', 'dec')),
+        'fd_dec': ('FD down', lambda ds: ews_dir_mask(ds, f'{var_name}_fd', 'dec')),
     }
 
     def break_mask(method):
@@ -713,7 +704,7 @@ def plot_map_ews(ds_breaks, ds_ews, var_name, out_dir):
         return ((p < alpha) & (cp > 0)).where(land_mask, False).fillna(False)
 
     for key, (label, mask_fn) in composites.items():
-        print(f"Mapping EWS composite: {label}")
+        print(f"Mapping EWS : {label}")
 
         if key.startswith('ac1_std'):
             needed = [f'{var_name}_ac1', f'{var_name}_std']
@@ -747,7 +738,7 @@ def plot_map_ews(ds_breaks, ds_ews, var_name, out_dir):
 # --- same bar plots but aridity class instead of biome --- 
 
 def get_area_da(lat_vals, lon_vals):
-    """Area (km²) per grid cell using spherical quad approx."""
+    """Area (km2) per grid cell """
     R = 6371.0
     dlat = float(np.abs(np.diff(lat_vals).mean())) if len(lat_vals) > 1 else 0.25
     dlon = float(np.abs(np.diff(lon_vals).mean())) if len(lon_vals) > 1 else 0.25
@@ -759,10 +750,7 @@ def get_area_da(lat_vals, lon_vals):
     return xr.DataArray(grid, coords={"lat": lat_vals, "lon": lon_vals}, dims=("lat", "lon"))
 
 def compute_aridity_classes_like(ds_target):
-    """
-    Compute time-mean aridity index (precip/PET), then bin to ARIDITY_BINS and map to ARIDITY_LABELS.
-    Returned DataArray has dims (lat, lon) with string labels.
-    """
+  
     # ERA5 precip monthly (m) → mm
     precip = xr.open_dataset("/mnt/data/romi/data/ERA5_0.25_monthly/total_precipitation/total_precipitation_monthly.nc")\
               .sel(time=slice("2000-01-01", "2023-12-31"))\
@@ -833,14 +821,10 @@ def _indicator_short_name(full_var: str) -> str:
     return lookup.get(suffix, suffix.upper())
 
 def _aridity_confusion_fraction_table(ds_breaks, ds_ews, var_name, which="indicators"):
-    """
-    Long-format DF with area-weighted fractions of TP/FP/FN/TN per aridity class,
-    for each indicator (or composite) and CP method.
-    Columns: aridity_class, method, label, cls, frac
-    """
+  
     alpha, indicators, _methods = _global_masks_and_methods(ds_breaks, ds_ews, var_name)
 
-    # Valid (land/terrestrial + non-urban) mask on ds_ews grid
+    # Valid 
     urban = xr.open_dataset("/mnt/data/romi/data/urban_mask.zarr").rio.write_crs("EPSG:4326").interp_like(ds_ews, method="nearest")
     urban = urban["urban-coverfraction"].squeeze("time", drop=True)
     lsm   = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")\
@@ -868,19 +852,19 @@ def _aridity_confusion_fraction_table(ds_breaks, ds_ews, var_name, which="indica
         return ((p < alpha) & (tau > 0 if direction == 'inc' else tau < 0)).fillna(False)
 
     composites = {
-        'AC1 ↑ & SD ↑':    lambda: ews_dir_mask(f'{var_name}_ac1','inc') & ews_dir_mask(f'{var_name}_std','inc'),
-        'AC1 ↓ & SD ↓':    lambda: ews_dir_mask(f'{var_name}_ac1','dec') & ews_dir_mask(f'{var_name}_std','dec'),
-        'AC1 ↑↓ & SD ↑↓':  lambda: (ews_dir_mask(f'{var_name}_ac1','inc') & ews_dir_mask(f'{var_name}_std','dec')) |
+        'AC1 up & SD up':    lambda: ews_dir_mask(f'{var_name}_ac1','inc') & ews_dir_mask(f'{var_name}_std','inc'),
+        'AC1 down & SD down':    lambda: ews_dir_mask(f'{var_name}_ac1','dec') & ews_dir_mask(f'{var_name}_std','dec'),
+        'AC1 updown & SD updown':  lambda: (ews_dir_mask(f'{var_name}_ac1','inc') & ews_dir_mask(f'{var_name}_std','dec')) |
                                    (ews_dir_mask(f'{var_name}_ac1','dec') & ews_dir_mask(f'{var_name}_std','inc')),
-        'Skew ↑ & Kurt ↑': lambda: ews_dir_mask(f'{var_name}_skew','inc') & ews_dir_mask(f'{var_name}_kurt','inc'),
-        'FD ↓':            lambda: ews_dir_mask(f'{var_name}_fd','dec'),
+        'Skew up & Kurt up': lambda: ews_dir_mask(f'{var_name}_skew','inc') & ews_dir_mask(f'{var_name}_kurt','inc'),
+        'FD down':            lambda: ews_dir_mask(f'{var_name}_fd','dec'),
     }
 
     rows = []
     if which == "indicators":
         label_iter = [f'{var_name}_{k}' for k, _ in INDICATORS_META]
     else:
-        label_iter = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+        label_iter = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
 
     for label in label_iter:
         # Indicator mask
@@ -929,10 +913,7 @@ def _aridity_confusion_fraction_table(ds_breaks, ds_ews, var_name, which="indica
     return df.sort_values(["method", "label", "aridity_class", "cls"])
 
 def plot_aridity_confusion_rows(df_long, var_name, out_dir, which="indicators"):
-    """
-    Make 1×5 stacked horizontal bar figures per method, across aridity classes.
-    One figure for indicators and one for composites (controlled by 'which').
-    """
+   
     colors = {'TP': '#7d475dff', 'FP': '#ffeaefff', 'FN': '#e9e2bcff', 'TN': '#2c787eff'}
     classes = ['TP', 'FP', 'FN', 'TN']
 
@@ -942,7 +923,7 @@ def plot_aridity_confusion_rows(df_long, var_name, out_dir, which="indicators"):
         titles       = [_indicator_short_name(lab) for lab in labels_order]
         fig_tag      = "indicators"
     else:
-        labels_order = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+        labels_order = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
         titles       = labels_order
         fig_tag      = "ews"
 
@@ -1107,7 +1088,7 @@ def plot_f1_heatmap_biomes_stc(ds_breaks, ds_ews, var_name, out_dir):
         return
     df_bio = df_bio[df_bio['method'] == 'stc'].copy()
 
-    labels_order = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+    labels_order = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
     title = f"{var_name}: F1 by biome (composites, stc)"
     out_fp = os.path.join(out_dir, f"{var_name}_stc_biome_f1_heatmap_ews.svg")
     _heatmap_from_long_f1(df_bio, index_col='biome_group', index_order=groups_plot,
@@ -1124,7 +1105,7 @@ def plot_f1_heatmap_aridity_stc(ds_breaks, ds_ews, var_name, out_dir):
         return
     df_arid = df_arid[df_arid['method'] == 'stc'].copy()
 
-    labels_order = ['AC1 ↑ & SD ↑', 'AC1 ↓ & SD ↓', 'AC1 ↑↓ & SD ↑↓', 'Skew ↑ & Kurt ↑', 'FD ↓']
+    labels_order = ['AC1 up & SD up', 'AC1 down & SD down', 'AC1 updown & SD updown', 'Skew up & Kurt up', 'FD down']
     title = f"{var_name}: F1 by aridity class (composites, stc)"
     out_fp = os.path.join(out_dir, f"{var_name}_stc_aridity_f1_heatmap_ews.svg")
     _heatmap_from_long_f1(df_arid, index_col='aridity_class', index_order=ARIDITY_PLOT,
@@ -1163,7 +1144,7 @@ def main():
     lon_name, lat_name = detect_lon_lat_names(ds_ews)
     ds_cp, ds_ews = apply_land_mask_if_precip(ds_cp, ds_ews, var_name, lon_name, lat_name)
 
-    """ # 1) PERFORMANCE SCORES (global)
+    # 1) PERFORMANCE SCORES (global)
     print('--- Global metrics: Indicators (F1 / Precision / Accuracy) ---')
     for metric in ["F1", "Precision", "Accuracy"]:
         plot_metric_indicators(ds_breaks=ds_cp, ds_ews=ds_ews, var_name=var_name, out_dir=out_dir, metric=metric)
@@ -1199,7 +1180,7 @@ def main():
     print('--- Aridity confusion fractions (5-panel): composites ---')
     df_arid_comp = _aridity_confusion_fraction_table(ds_breaks=ds_cp, ds_ews=ds_ews,
                                                      var_name=var_name, which="composites")
-    plot_aridity_confusion_rows(df_arid_comp, var_name, out_dir, which="composites") """
+    plot_aridity_confusion_rows(df_arid_comp, var_name, out_dir, which="composites")
 
     # 5) F1 heatmaps only for stc and only the composite indicators 
     print('--- F1 heatmap by biome (composites, stc) ---')

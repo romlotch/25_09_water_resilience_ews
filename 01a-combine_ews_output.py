@@ -7,14 +7,21 @@ import pandas as pd
 import xarray as xr
 
 """ 
-Combine processed EWS tiles into one dataset for further analysis 
+Combine processed EWS tiles into one dataset for further analysis. This script is run 
+once you have all the tiles processed. 
+
+Out_path is hardcoded
+
+Inputs:
+    --output_dir: directory where the processed tiles were saved 
+    --var: name of the variable for which EWS were calculated
+    --suffix: specify a filename suffix to differentiate full time series runs from postive and negative runs. 
 
 E.g. 
     python 01a-combine_ews_output.py --output_dir '/mnt/data/romi/dev/ews/processed_tiles_Et' --var 'Et'
 
 For the EWS pre-breakpoint positive 
     python 01a-combine_ews_output.py --output_dir 'processed_tiles_Et_breakpoints' --var 'Et' --suffix 'breakpoint_stc'
-
 For the EWS pre-breakpoint negative
     python 01a-combine_ews_output.py --output_dir 'processed_tiles_Et_breakpoints_neg' --var 'Et' --suffix 'breakpoint_stc_neg'
 
@@ -48,7 +55,7 @@ def merge_ews_tiles(output_dir: str, var: str, suffix: str | None = None) -> Non
     ds = ds.chunk({"lat": -1, "lon": -1, "time": -1})
 
     sfx = _format_suffix(suffix)
-    out_path = f"/mnt/data/romi/output/paper_1/output_{var}_final/out_{var}{sfx}.zarr"
+    out_path = f"/mnt/data/romi/output/paper_1/output_{var}_final/out_{var}{sfx}.zarr"              ### change this to your own dir
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     print(f"Writing: {out_path}")

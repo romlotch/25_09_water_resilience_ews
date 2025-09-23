@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 import os
 import argparse
 import numpy as np
@@ -7,10 +7,14 @@ import xarray as xr
 import seaborn as sn
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-import rioxarray  # for .rio
+import rioxarray  
 
 """
 Grouped aridity stacked bars (Decrease/Neutral/Increase) per indicator.
+Not used. 
+
+Specify --mode indicators or combined to plot the individual indicators
+or the EWS families 
 
 Example:
     python 02c-plot_aridity.py \
@@ -29,7 +33,7 @@ Example:
     
 """
 
-# ---------------- CLI ----------------
+# --- CLI ---
 def parse_args():
     ap = argparse.ArgumentParser(
         description="Plot aridity-class summary bars for indicators or combined resilience signals."
@@ -41,7 +45,7 @@ def parse_args():
                     help="Plot raw indicators (5 panels) or composite signals (5 panels).")
     return ap.parse_args()
 
-# ---------------- Indicators (as in your biome script) ----------------
+# --- Indicators ---
 INDICATORS = [
     ("ac1",  "AC1"),
     ("std",  "SD"),
@@ -50,7 +54,7 @@ INDICATORS = [
     ("kurt", "Kurt"),
 ]
 
-# ---------------- Aridity binning ----------------
+#--- Aridity binning ---
 ARIDITY_BINS = [0, 0.03, 0.2, 0.35, 0.5, 0.65, 0.8, 1, 1.25, 1.5, np.inf]
 ARIDITY_LABELS = [
     "Hyper-arid",
@@ -77,19 +81,18 @@ ARIDITY_LABELS = [
 
 ARIDITY_PLOT = ARIDITY_LABELS 
 
-# ---------------- Helpers ----------------
+# --- Helpers ---
 def wrap_to_180(ds, lon_name="lon"):
     ds = ds.assign_coords({lon_name: (((ds[lon_name] + 180) % 360) - 180)}).sortby(lon_name)
     return ds
 
 def get_area_grid(lat, dlon=0.25, dlat=0.25):
-    """Area (km²) per grid cell at each latitude for a rectilinear grid."""
+    """Area (km2) per grid cell at each latitude """
     R = 6371.0  # km
     lat_rad = np.radians(lat)
     dlat_rad = np.radians(dlat)
     dlon_rad = np.radians(dlon)
-    # spherical quadrangle: R^2 * dlon * (sin(phi+ dphi/2) - sin(phi - dphi/2))
-    # but for small dphi, cos(phi)*dphi approx is fine and matches your notebook
+
     return (R**2) * dlat_rad * dlon_rad * np.cos(lat_rad)
 
 def area_da_for_grid(lat, lon):
@@ -113,6 +116,12 @@ def tri_split_areas(kt, pval, area_da):
 def compute_aridity_classes_like(ds_target):
     """Compute time-mean aridity index (precip/PET), bin to classes, and
     return a DataArray of labels on the ds_target grid (lat, lon)."""
+
+    AI_MEAN_MAX = 100.0        
+
+    def wrap_to_180(ds, lon_name="lon"):
+        ds = ds.assign_coords({lon_name: (((ds[lon_name] + 180) % 360) - 180)}).sortby(lon_name)
+        return ds
 
     # --- Precip (ERA5 monthly total precip 2000–2023) ---
     precip = xr.open_dataset(
@@ -149,26 +158,31 @@ def compute_aridity_classes_like(ds_target):
     pet = xr.open_dataset("/mnt/data/romi/data/et_pot/monthly_sum_epot_clean.zarr").sel(
         time=slice("2000-01-01", "2023-11-30")
     )
-    # Convert annual sum to monthly mean (from your snippet)
-    pet["pet"] = pet["pet"] / 12.0
-
     pet["time"] = ("time", pd.date_range(
         start=str(pet.time.values[0])[:10],
         periods=pet.sizes["time"],
         freq="MS"
     ))
 
-    # Avoid zeros
+    # Avoid zeros 
     precip_tp = precip["tp"].where(precip["tp"] != 0, 1e-6)
     pet_pet   = pet["pet"].where(pet["pet"] != 0, 1e-6)
 
     # Align by time
     precip_aligned, pet_aligned = xr.align(precip_tp, pet_pet, join="inner")
 
-    # Aridity index and time-mean
-    aridity_index = (precip_aligned / pet_aligned).rename("aridity_index")
-    aridity_index = aridity_index.where(mask_interp > 0.7)
-    aridity_mean = aridity_index.mean(dim="time")
+    # AI = ratio of annual sums 
+    P_y   = precip_aligned.resample(time="YS").sum()
+    PET_y = pet_aligned.resample(time="YS").sum().where(lambda x: x != 0, 1e-6) # replace crazy values
+
+    ai_annual = (P_y / PET_y).rename("aridity_index")
+    ai_annual = ai_annual.where(mask_interp > 0.7)
+
+    # Mask absurd annual values before computing stats
+    ai_annual = ai_annual.where(ai_annual <= AI_MEAN_MAX)
+
+    ai_ds = xr.Dataset({"aridity_index": ai_annual*10})
+    aridity_mean = ai_ds.mean(dim="time")
 
     # Interp to analysis grid
     aridity_on_target = aridity_mean.interp(lat=ds_target.lat, lon=ds_target.lon)
@@ -183,7 +197,7 @@ def compute_aridity_classes_like(ds_target):
         output_dtypes=[int],
     )
 
-    # Map to labels 1..len(labels)
+    # Map to labels
     def idx_to_label(idx):
         if 1 <= idx <= len(ARIDITY_LABELS):
             return ARIDITY_LABELS[idx - 1]
@@ -203,15 +217,11 @@ def compute_aridity_classes_like(ds_target):
 
 
 def combined_signal_masks(ds, prefix):
+
+    """ 
+    BUild masks for the EWS
     """
-    Return dict[str -> xr.DataArray(bool)] for:
-      - CSD: AC1↑ & SD↑
-      - CSU: AC1↓ & SD↓
-      - Mixed: (AC1↑ & SD↓) | (AC1↓ & SD↑)
-      - FD↓: FD↓
-      - Flickering: Skew↑ & Kurt↑
-    All directions must be significant at p < 0.05.
-    """
+
     ac1  = ds[f"{prefix}_ac1_kt"];  ac1_p  = ds[f"{prefix}_ac1_pval"]
     std  = ds[f"{prefix}_std_kt"];  std_p  = ds[f"{prefix}_std_pval"]
     fd   = ds[f"{prefix}_fd_kt"];   fd_p   = ds[f"{prefix}_fd_pval"]
@@ -238,12 +248,12 @@ def combined_signal_masks(ds, prefix):
     }
 
 
-# ---------------- Main ----------------
+# --- Main ---
 def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    # Kt output dataset (with _kt and _pval)
+    # tau output dataset 
     ds = xr.open_dataset(args.dataset)
 
     # Urban mask 
@@ -252,34 +262,33 @@ def main():
     urban_mask = urban_mask["urban-coverfraction"].squeeze("time")
 
     # land-sea mask to keep only land for precipitation
-    # If the ds already excludes ocean it still works fine 
+    # If the ds already excludes ocean it still works 
     lsm = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")
     lsm = lsm.rename({"latitude": "lat", "longitude": "lon"}).rio.write_crs("EPSG:4326")
     lsm = wrap_to_180(lsm, "lon")
     lsm = lsm.rio.set_spatial_dims("lon", "lat", inplace=True) or lsm
     lsm_interp = lsm["lsm"].interp(lat=ds.lat, lon=ds.lon)
 
-    # Keep terrestrial, non-urban (≤3%) pixels
+    # Keep terrestrial, non-urban pixels
     terrestrial = (lsm_interp > 0.5) | lsm_interp.isnull()
     non_urban   = (urban_mask <= 3) | urban_mask.isnull()
     valid_mask  = terrestrial & non_urban
 
-    # Compute aridity classes on ds grid
+    # Compute aridity classes 
     aridity_class = compute_aridity_classes_like(ds).where(valid_mask)
 
-    # Build containers: {indicator_key: {aridity_label: {dec,neu,inc,tot}}}
+    # Build containers
     group_totals = {
         k: {lab: {"dec": 0.0, "neu": 0.0, "inc": 0.0, "tot": 0.0} for lab in ARIDITY_PLOT}
         for k, _ in INDICATORS
     }
 
-    # Pre-compute area on ds grid (assumes 0.25)
+    # Pre-compute area on ds grid 
     lat = ds["lat"].values
     lon = ds["lon"].values
     dlat = float(np.abs(np.diff(lat).mean())) if lat.size > 1 else 0.25
     dlon = float(np.abs(np.diff(lon).mean())) if lon.size > 1 else 0.25
 
-    # area function assumes 0.25 degrees resolution 
     def area_da_custom(lat_vals, lon_vals):
         R = 6371.0
         dlat_rad = np.radians(dlat)
@@ -355,7 +364,7 @@ def main():
         plt.show(); plt.close(fig)
         return
 
-    # -------- Mode: combined (5 composite panels) --------
+    # --- Mode: combined (5 composite panels) ---
     combos = combined_signal_masks(ds, args.var)
 
     # For each aridity class and combo, compute % of class area where combo True

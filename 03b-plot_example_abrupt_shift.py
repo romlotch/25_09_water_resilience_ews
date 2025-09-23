@@ -14,6 +14,12 @@ with the highest Fstat based on Fmax.
 
 Path to land mask is hardcoded. 
 
+Inputs: 
+    --raw: path to original ews output with raw series
+    --chp: path to chp output
+    --var: variable 
+    --outdir: where to save plots to 
+
 E.g. 
     python 03b-plot_example_abrupt_shift.py --raw '/mnt/data/romi/output/paper_1/output_sm_final/out_sm.zarr' --chp '/mnt/data/romi/output/paper_1/output_sm_final/out_sm_chp.zarr' --var 'sm' --outdir '/mnt/data/romi/figures/paper_1/supplementary_final/supp_abrupt_shifts'
     python 03b-plot_example_abrupt_shift.py --raw '/mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr' --chp '/mnt/data/romi/output/paper_1/output_Et_final/out_Et_chp.zarr' --var 'Et' --outdir '/mnt/data/romi/figures/paper_1/supplementary_final/supp_abrupt_shifts'
@@ -21,8 +27,8 @@ E.g.
 
 """
 
-# ------------ helpers ------------
-def open_source_ds(path: str) -> xr.Dataset:
+# ---helpers ---
+def open_source_ds(path):
     """Open NetCDF or Zarr by path."""
     if os.path.isdir(path) and (
         os.path.exists(os.path.join(path, ".zgroup"))
@@ -31,8 +37,8 @@ def open_source_ds(path: str) -> xr.Dataset:
         return xr.open_zarr(path)
     return xr.open_dataset(path)
 
-def mask_precip_to_land(ds_p: xr.Dataset) -> xr.Dataset:
-    """Return precip dataset masked to land (lsm>0.7) on ds_p's lon/lat grid."""
+def mask_precip_to_land(ds_p):
+    """Return precip datasetwith land mask"""
 
     LANDSEA_PATH = "/mnt/data/romi/data/landsea_mask.grib"
     
@@ -49,7 +55,7 @@ def mask_precip_to_land(ds_p: xr.Dataset) -> xr.Dataset:
         longitude=ds_p.lon, latitude=ds_p.lat, method="nearest"
     )
 
-    # boolean land mask, rename dims to match precip
+    # land mask, rename dims to match precip
     land = (ds_mask_i["lsm"] > 0.7)
 
     if "longitude" in land.dims:
@@ -65,13 +71,12 @@ def mask_precip_to_land(ds_p: xr.Dataset) -> xr.Dataset:
 
     land = land.reindex_like(ds_p, method=None)
     
-    # apply
     return ds_p.where(land)
 
-def cp_index_to_datetime(time_da: xr.DataArray, cp_index: float) -> np.datetime64:
+def cp_index_to_datetime(time_da, cp_index):
     """
-    Convert a changepoint *index* (0-based) to a datetime on the raw series' time axis.
-    We infer the time step from the median delta of the provided time coordinate.
+    Convert a changepoint index to a datetime .
+    Infer time step from median delta of the time coordinate.
     """
     if time_da.size == 0 or np.isnan(cp_index):
         return np.datetime64('NaT')
@@ -79,17 +84,14 @@ def cp_index_to_datetime(time_da: xr.DataArray, cp_index: float) -> np.datetime6
     if time_da.size > 1:
         step = np.median(np.diff(time_da.values).astype('timedelta64[ns]'))
     else:
-        # fallback: 7 days if only one point (won't be used in practice)
-        step = np.timedelta64(7, 'D').astype('timedelta64[ns]')
-    # allow fractional indices—places the line between samples if needed
+        step = np.timedelta64(7, 'D').astype('timedelta64[ns]') # this doesnt happen
     offset = (np.float64(cp_index) * np.int64(step)).astype('timedelta64[ns]')
     return (t0 + offset).astype('datetime64[ns]')
 
-def pick_example_pixels(ds_chp: xr.Dataset, n: int, fmax: float):
+def pick_example_pixels(ds_chp, n, fmax):
     """
-    Select up to N pixels with significant F-stat changepoints, ranked by Fstat desc,
-    but only consider pixels with Fstat <= fmax. If none pass the cap, fall back
-    to uncapped selection so the plot still works.
+    Select N pixels with highest F-stats as examples, but cant be more
+    than specified fmax. 
     """
     needed = ["Fstat", "Fstat_pval", "strucchange_bp"]
     for v in needed:
@@ -110,7 +112,7 @@ def pick_example_pixels(ds_chp: xr.Dataset, n: int, fmax: float):
     Fvals = Fsig.values
     idx = np.argwhere(np.isfinite(Fvals))
 
-    # Fallback: if nothing under the cap, use uncapped (still significant)
+    # if theres nothing under fmax just use fmax so it doesnt error
     if idx.size == 0:
         Fsig = F.where(base_mask)
         Fvals = Fsig.values
@@ -126,10 +128,7 @@ def pick_example_pixels(ds_chp: xr.Dataset, n: int, fmax: float):
 
 def set_ylim_mean_centered(ax, y, pad=0.05, draw_mean=False):
     """
-    Set y-limits so ymin=0 and the mean is ~midway.
-    ymax = max(2*mean(y), (1+pad)*max(y)).
-
-    If data are empty/NaN, falls back to (0, 1).
+    Centre ylims on mean
     """
     y = np.asarray(y)
     y = y[np.isfinite(y)]
@@ -147,40 +146,27 @@ def set_ylim_mean_centered(ax, y, pad=0.05, draw_mean=False):
     if draw_mean:
         ax.axhline(y_mean, ls="--", lw=0.8, alpha=0.5, color="k")
 
-# ------------ plotting core ------------
-def plot_example_timeseries(raw_ds, chp_ds, var_name: str,  fmax: float, outdir: str, n_examples: int = 12):
-    """
-    Make a panel plot of example raw time series at pixels with significant abrupt shifts
-    (StructChange/F test). A vertical line marks the detected breakpoint.
-    """
+# --- plot ---
+def plot_example_timeseries(raw_ds, chp_ds, var_name,  fmax, outdir, n_examples = 12):
+    
     if var_name.lower() in ("precip", "p", "pr"):
         raw_ds = mask_precip_to_land(raw_ds)
         chp_ds = mask_precip_to_land(chp_ds)
         
-    # sanity
-    if var_name not in raw_ds:
-        raise KeyError(f"'{var_name}' not found in raw dataset.")
-    if "time" not in raw_ds[var_name].dims:
-        raise ValueError("Raw variable must have a 'time' dimension.")
-    if "lat" not in raw_ds.dims or "lon" not in raw_ds.dims:
-        raise ValueError("Expected 'lat' and 'lon' dimensions.")
-
     # pick pixels
     picks = pick_example_pixels(chp_ds, n_examples, fmax = fmax)
     if not picks:
         raise RuntimeError("No significant abrupt shifts found (Fstat test).")
 
-    # figure layout
     n = len(picks)
     ncols = 3
     nrows = math.ceil(n / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 2.8 * nrows), squeeze=False, sharex=False, sharey=False)
 
-    # pull arrays for speed
     time = raw_ds["time"]
     da   = raw_ds[var_name]
 
-    # cp fields
+    # cp vars
     F     = chp_ds["Fstat"]
     pval  = chp_ds["Fstat_pval"]
     bp    = chp_ds["strucchange_bp"]
@@ -193,11 +179,10 @@ def plot_example_timeseries(raw_ds, chp_ds, var_name: str,  fmax: float, outdir:
 
         # extract series
         ts = da.isel(lat=ilat, lon=ilon)
-        # axis: time
         x = time.values
         y = ts.values
 
-        # breakpoint -> datetime on same axis
+        # breakpoint =  datetime on same axis
         cp_val = float(bp.isel(lat=ilat, lon=ilon).values)
         x_cp   = cp_index_to_datetime(time, cp_val)
 
@@ -206,14 +191,13 @@ def plot_example_timeseries(raw_ds, chp_ds, var_name: str,  fmax: float, outdir:
         if np.isfinite(cp_val) and not np.isnat(x_cp):
             ax.axvline(x_cp, color="#cd5d5d", lw=1.5, alpha=0.9)
 
-        # subtitle with lat/lon and stats
+        # title with lat/lon and stats
         latv = float(raw_ds["lat"].values[ilat])
         lonv = float(raw_ds["lon"].values[ilon])
         fval = float(F.isel(lat=ilat, lon=ilon).values)
         pvalv = float(pval.isel(lat=ilat, lon=ilon).values)
         ax.set_title(f"Latitude: {latv:.2f}, Longitude: {lonv:.2f}", fontsize=9)
 
-        # cosmetics: only left & bottom spines
         for spine_name, spine in ax.spines.items():
             spine.set_visible(spine_name in ("left", "bottom"))
             if spine.get_visible():
@@ -239,7 +223,7 @@ def plot_example_timeseries(raw_ds, chp_ds, var_name: str,  fmax: float, outdir:
     plt.close(fig)
     print(f"Saved: {svg}")
 
-# ------------ main ------------
+# --- main ---
 def main():
 
     plt.rc("figure", figsize=(13, 9))

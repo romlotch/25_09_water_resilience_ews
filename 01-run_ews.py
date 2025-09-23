@@ -1,5 +1,5 @@
 
-#!/usr/bin/env python3
+
 import os
 import sys
 import glob
@@ -12,13 +12,29 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 import gc
 
-# ─── Patch psutil bug ─────────────────────────────────────────────────────────
+# Patch psutil bug 
 import builtins, psutil._common
 def _raise_from(err): raise err
 psutil._common.raise_from = _raise_from
 def _open_binary(path, mode='rb', **kwargs): return builtins.open(path, mode, **kwargs)
 psutil._common.open_binary = _open_binary
-# ────────────────────────────────────────────────────────────────────────────────
+
+
+""" 
+Run EWS on input time series in pure numpy (faster in parallel than with xarray/dask). 
+First creates tiles and saves them to a folder the current working directory.
+Then runs the EWS on each tile and saves them to a separate working directory. 
+
+Inputs:
+    --dataset: path to dataset (format that can be read by xarray)
+    --variable: name of the variable on which to run the EWS
+    --freq: specify the resampling frequency (i.e. 'W' or keep daily)
+    --workers: specify number of workers
+
+Saves 
+ 
+"""
+
 
 
 def open_source_ds(path):
@@ -32,7 +48,7 @@ def open_source_ds(path):
         return xr.open_dataset(path)
 
 def standardize_lat_lon(ds):
-    """Rename dims to lat, lon, time, set EPSG:4326 and centre on 0 instead of 180"""
+    """Rename dims to lat, lon, time, set projection and centre on 0 instead of 180"""
     
     rename = {}
     if "latitude" in ds.dims:  rename["latitude"] = "lat"
@@ -47,7 +63,7 @@ def standardize_lat_lon(ds):
 
 
 def _infer_weekly_agg(variable):
-    """Choose 'sum' for precipitation variables, otherwise use the 'mean'."""
+    """Choose SUM for precipitation variables, otherwise use the MEAN."""
     v = variable.lower()
     precip_aliases = {"precip","pr","precipitation","tp","rain","rainfall"}
     return "sum" if any(a in v for a in precip_aliases) else "mean"
@@ -73,7 +89,7 @@ def preprocess(ds, variable, freq: str = "D", t0: str = "2000-01-01", t1: str = 
 
 
 def _write_tile_from_path(dataset_path, variable, tile_path, lat_slice, lon_slice, freq: str):
-    """Worker helper: slice out a tile and write it."""
+    """Slice out a tile and write it."""
 
     ds = open_source_ds(dataset_path)
 
@@ -155,7 +171,7 @@ def create_tiles(dataset_path, variable, out_dir, tile_size: int = 50, workers: 
 
 
 def _infer_stl_period(times, freq_hint):
-    """52 for weekly, else ~365 for dailye."""
+    """52 for weekly, else 365 for dailye."""
     if isinstance(freq_hint, str) and freq_hint.upper().startswith("W"):
         return 52
     # fall back: infer from median step
@@ -181,6 +197,7 @@ def remove_multiple_trends_STL(values, times, period):
     resid[missing] = np.nan
 
     # old: resid = STL(filled, period=52, seasonal=13, trend=201, robust=True).fit().resid
+    # new infers period and seasonality 
     
     return resid.values
 
@@ -230,7 +247,7 @@ def rolling_ews(ts, window):
 def compute_tile_outputs(raw,times,lat, lon, variable, window, freq_hint = None):
     """
     Given a (time,lat,lon) raw np array, either return all-NaN placeholders
-    or compute the detrended series, EWS stats, and deltas in pure numpy.
+    or compute the detrended series, EWS stats, and deltas.
     Returns (data_vars, coords).
     """
     nt, nlat, nlon = raw.shape

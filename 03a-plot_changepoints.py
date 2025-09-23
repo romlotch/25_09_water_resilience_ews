@@ -72,16 +72,16 @@ E.g.
 
 def adjust_colormap(cmap, minval=0.0, maxval=1.0, saturation_scale=0.5, n=256):
     """
-    Truncate and desaturate a colormap by adjusting saturation in HLS color space.
+    Truncate and desaturate a colormap by adjusting saturation.
     """
-    # Sample the original colormap
+    # Sample original cmap
     sampled = cmap(np.linspace(minval, maxval, n))
     
     # Desaturate each color
     desat_colors = []
     for r, g, b, a in sampled:
         h, l, s = colorsys.rgb_to_hls(r, g, b)
-        s *= saturation_scale  # Reduce saturation
+        s *= saturation_scale  # Reduce sat
         r_new, g_new, b_new = colorsys.hls_to_rgb(h, l, s)
         desat_colors.append((r_new, g_new, b_new, a))
 
@@ -102,42 +102,34 @@ def create_bivariate_color_log(prop_array, abs_array,
                            vmin_abs=0, vmax_abs=2,
                            cmap_prop='RdBu', cmap_abs=sn.light_palette('#AA180E', as_cmap = True)):
     """
-    Given two 2D numpy arrays (for proportion and absolute difference),
+    Take 2D numpy arrays (one for prop and one for abs difference),
     normalize them to [0,1] based on provided limits, extract colors using two 
-    separate colormaps, and blend the colors (here, by a simple average of the RGB channels).
+    separate colormaps, and blend the colors-
     """
-    # Normalize each array
+    # Normalize 
     norm_prop = np.clip((prop_array - vmin_prop) / (vmax_prop - vmin_prop), 0, 1)
     norm_abs = np.log1p(np.clip(abs_array, 0, vmax_abs)) / np.log1p(vmax_abs)
     
-    # Get the colormap objects
+    # Get the cmap
     cmap1 = plt.get_cmap(cmap_prop)
     cmap2 = plt.get_cmap(cmap_abs)
     
-    # Map normalized values to RGBA colors. The result is an array of shape (nrows, ncols, 4)
+    # Map normalized values to RGBA colors.
     colors_prop = cmap1(norm_prop)
     colors_abs  = cmap2(norm_abs)
 
     weight_abs = 0.6
     weight_prop = 1.0 - weight_abs
 
-    
-    # Blend the two color arrays. Here we average the RGB channels, 
-    # but you might use other weights if you want one variable to drive the blend more.
-    # blended_rgb = (colors_prop[..., :3] + colors_abs[..., :3]) / 2.0
-    # blended_rgb = colors_prop[..., :3] * colors_abs[..., :3] # multiplicative blending 
     blended_rgb = (weight_prop * colors_prop[..., :3] + weight_abs * colors_abs[..., :3])
     blended_rgb = np.clip(blended_rgb, 0, 1)
     gamma = 1.2  # lower = more contrast
     blended_rgb = blended_rgb ** gamma
 
-    # Add an alpha channel (set to 1 everywhere)
+    # Add alpha (set to 1 everywhere)
     blended_rgba = np.concatenate([blended_rgb, np.ones(blended_rgb.shape[:-1] + (1,))], axis=-1)
-
-    
     
     return blended_rgba
-
 
 
 def plot_year_chp(ds, var_name, outdir, test_name):
@@ -244,17 +236,17 @@ def plot_prop_abs_change(ds, var_name, outdir, test_name):
         pval_type = 'pval_var'
 
 
-    # --- masks: only significant breakpoints ---
+    # masks: only significant breakpoints
     prop = ds[f'{prop_type}'].where((ds[f'{pval_type}'] < 0.05) & (ds[f'{cp_type}'] > 0)).values
     abs_diff = ds[f'{diff_type}'].where((ds[f'{pval_type}'] < 0.05) & (ds[f'{cp_type}'] > 0)).values
 
-    # --- coordinates for imshow ---
+    # coordinates for imshow 
     lon = ds['lon'].values
     lat = ds['lat'].values
     lon_min, lon_max = lon.min(), lon.max()
     lat_min, lat_max = lat.min(), lat.max()
 
-    # --- combined bivariate colors ---
+    # combined bivariate colors
     combined_colors = create_bivariate_color_log(
         prop, abs_diff,
         vmin_prop=0.75, vmax_prop=1.25,
@@ -263,7 +255,7 @@ def plot_prop_abs_change(ds, var_name, outdir, test_name):
         cmap_abs=truncate_colormap(sn.light_palette("#ab7171ff", as_cmap=True), 0.0, 0.8)
     )
 
-    # --- MAP FIGURE ---
+    # MAP FIGURE 
     fig, ax = plt.subplots(figsize=(7, 4.5), subplot_kw={'projection': ccrs.Robinson()})
     ax.add_feature(cfeature.LAND, facecolor='white', linewidth=0.5, edgecolor='none', zorder=0)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.3)
@@ -271,7 +263,7 @@ def plot_prop_abs_change(ds, var_name, outdir, test_name):
     # Clip out antarctica here if you want
     # ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
 
-    # remove projection border
+    # remove border
     for spine in ax.spines.values():
         spine.set_visible(False)
 
@@ -298,12 +290,12 @@ def plot_prop_abs_change(ds, var_name, outdir, test_name):
     ax.set_ylabel("")
     ax.set_title("")
 
-    # --- SAVE MAP PNG ---
+    #  SAVE MAP PNG 
     map_path = f"{outdir}/{var_name}_{test_name}_prop_abs_map.png"
     fig.savefig(map_path, dpi=300, bbox_inches='tight', facecolor='white', pad_inches=0.05)
     plt.close(fig)
 
-    # --- LEGEND (BIVARIATE COLOR KEY) ---
+    # Legend
     grid_size = 100
     prop_vals = np.linspace(0.75, 1.25, grid_size)  # y-axis
     abs_vals  = np.linspace(0.0, 0.01, grid_size)   # x-axis
@@ -333,7 +325,7 @@ def plot_prop_abs_change(ds, var_name, outdir, test_name):
 
     plt.tight_layout()
 
-    # --- SAVE LEGEND SVG (transparent bg) ---
+    # SAVE LEGEND SVG 
     legend_path = f"{outdir}/{var_name}_{test_name}_prop_abs_legend.svg"
     fig_leg.savefig(legend_path, dpi = 300, format='svg', bbox_inches='tight', transparent=True)
     plt.close(fig_leg)
@@ -367,7 +359,7 @@ def main():
 
     ds = xr.open_dataset(ds_path)
 
-    # --- Land mask for precipitation ---
+    # Land mask for precipitation 
     if var_name == "precip":
         ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
 

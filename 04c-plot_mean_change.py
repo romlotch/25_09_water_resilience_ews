@@ -65,7 +65,6 @@ E.g.
 INDICATOR_STATS = ("ac1", "std", "skew", "kurt", "fd")
 LABELS = {"ac1": "AC1", "std": "SD", "skew": "Skew.", "kurt": "Kurt.", "fd": "FD"}
 
-# Value ranges to match your delta plotting
 VMAP = {
     "sm": {
         "vmin": [-0.50, -0.04, -3,  -20, -0.2],
@@ -82,11 +81,8 @@ VMAP = {
 }
 
 
-def _get_meanchange_field(ds: xr.Dataset, base: str, stat: str) -> xr.DataArray:
-    """
-    Try common mean-change naming conventions for a given base variable and stat.
-    Returns the DataArray if found, else raises a clear KeyError.
-    """
+def _get_meanchange_field(ds, base, stat):
+    
     candidates = [
         f"{base}_{stat}_mean_change",
         f"{base}_{stat}_meanchange",
@@ -96,12 +92,6 @@ def _get_meanchange_field(ds: xr.Dataset, base: str, stat: str) -> xr.DataArray:
     for name in candidates:
         if name in ds:
             return ds[name]
-    # Helpful error: show nearby matches
-    nearby = [v for v in ds.data_vars if base in v and stat in v]
-    raise KeyError(
-        f"Could not find mean-change field for base='{base}', stat='{stat}'. "
-        f"Tried {candidates}. Nearby matches: {nearby[:10]}"
-    )
 
 def plot_meanchange(ds, var_name, out_path): 
     # Output dir
@@ -111,9 +101,7 @@ def plot_meanchange(ds, var_name, out_path):
     # Colormap
     cmap = sn.color_palette("RdBu_r", as_cmap=True)
 
-    # Choose vmin/vmax sets to mirror your delta plots
     if var_name not in VMAP:
-        # Fallback: use precip ranges if unknown, else adjust as needed
         rng = VMAP["precip"]
     else:
         rng = VMAP[var_name]
@@ -157,7 +145,7 @@ def plot_meanchange(ds, var_name, out_path):
         cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
         cbar.set_label(label)
 
-        # Save standalone colorbar (SVG)
+        # Save cbar
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))
         norm = plt.Normalize(vmin=vmins[i], vmax=vmaxs[i])
         cb1 = plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=ax_cb, orientation='horizontal')
@@ -191,10 +179,8 @@ def main():
     var_name = args.variable
     out_path = args.output_path
 
-    # Open Zarr correctly
     ds = xr.open_zarr(ds_path)
 
-    # Optional masking for precip (move AFTER opening ds so coords are known)
     if var_name == "precip":
         mask_ds = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
 
