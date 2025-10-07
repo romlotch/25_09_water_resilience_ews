@@ -150,8 +150,11 @@ def combined_family_masks(ds, prefix):
     fd_down  = (sig(fd_p) & (fd < 0))
 
     # Flickering
-    flick_up   = (sig(skew_p) & (skew > 0)) & (sig(kurt_p) & (kurt > 0))
-    flick_down = (sig(skew_p) & (skew < 0)) & (sig(kurt_p) & (kurt < 0))
+    flick_up     = (sig(skew_p) & (skew > 0)) & (sig(kurt_p) & (kurt > 0))
+    flick_down   = (sig(skew_p) & (skew < 0)) & (sig(kurt_p) & (kurt < 0))
+    flick_mix_1  = (sig(skew_p) & (skew > 0)) & (sig(kurt_p) & (kurt < 0))
+    flick_mix_2  = (sig(skew_p) & (skew < 0)) & (sig(kurt_p) & (kurt > 0))
+    flick_mixed  = (flick_mix_1 | flick_mix_2)
 
     return OrderedDict([
         ("AC1 & SD", OrderedDict([
@@ -165,6 +168,7 @@ def combined_family_masks(ds, prefix):
         ])),
         ("Flickering (Skew & Kurt)", OrderedDict([
             ("Skew up & Kurt up", flick_up),
+            ("Mixed (one up, one down)", flick_mixed),
             ("Skew down & Kurt down", flick_down),
         ])),
     ])
@@ -328,7 +332,7 @@ def main():
 
         # pseudo-biome: cropland
         grp = "Cropland"
-        crop_clipped = ds.where(crop_only)
+        crop_clipped = ds.where(rainfed_cropland)
         area_da = area_da_for(crop_clipped)
         for key, _label in indicators:
             kt   = crop_clipped[f"{prefix}_{key}_kt"]
@@ -480,7 +484,7 @@ def main():
 
     # Cropland handled separately
     grp = "Cropland"
-    crop_denom_area = float(area_da.where(land & crop_only).sum().values)
+    crop_denom_area = float(area_da.where(land & rainfed_cropland).sum().values)
     for fam_name, cats in families.items():
         family_acc[fam_name][grp]["den"] += crop_denom_area
         for cat_name, cat_mask in cats.items():
@@ -515,17 +519,18 @@ def main():
     family_order = ["AC1 & SD", "Fractal dimension", "Flickering (Skew & Kurt)"]
     category_colors = {
         "AC1 & SD": {
-            "Both ↑ (AC1↑ & SD↑)": RED,
+            "Both up (AC1 up & SD up)": RED,
             "Mixed (one up, one down)": GREY,
-            "Both ↓ (AC1↓ & SD↓)": BLUE,
+            "Both down (AC1 down & SD down)": BLUE,
         },
         "Fractal dimension": {
-            "FD ↑": RED,
-            "FD ↓": BLUE,
+            "FD up": RED,
+            "FD down": BLUE,
         },
         "Flickering (Skew & Kurt)": {
-            "Skew↑ & Kurt↑": RED,
-            "Skew↓ & Kurt↓": BLUE,
+            "Skew up & Kurt up": RED,
+            "Mixed (one up, one down)": GREY,
+            "Skew down & Kurt down": BLUE,
         },
     }
 
