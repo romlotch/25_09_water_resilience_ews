@@ -1,4 +1,4 @@
-import os
+#!/usr/bin/env python3
 import os
 import argparse
 import numpy as np
@@ -7,28 +7,19 @@ import xarray as xr
 from statsmodels.tsa.seasonal import STL
 from scipy.stats import kendalltau
 from sklearn.metrics import cohen_kappa_score
+import re
 
 
-""" 
-Run a simple sensitivity analysis using cohen's kappa that tests effect of temporal aggregation, 
-window size, and some detrending parameters (robust STL and including diff or not)
-on a tile.
-
-Inputs: 
-    --dataset: ews output to run the sensitivity on (uses the raw data variable that is still in the file)
-    --variable: variable name
-    --outdir: specify the output dir
-    --i0, i1, j0, j1: indices to slice a tile 
-    --eps: optionally specify tolerance for when delta is 0 
-
-python3 01c-sensitivity.py \
-            --dataset /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr \
-            --variable precip \
-            --outdir /mnt/data/romi/output/paper_1/output_precip_final \
-            --i0 270 --i1 320 --j0 470 --j1 520: indices to slice out the tile 
-            
-            
 """
+Example:
+python3 01c-sensitivity_tau_lightsk.py \
+  --dataset /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr \
+  --variable Et \
+  --outdir /mnt/data/romi/output/paper_1/output_Et_final \
+  --i0 270 --i1 320 --j0 470 --j1 520 \
+  --eps_tau 0.05 --p_alpha 0.05
+"""
+
 
 # ========= helpers to open and prep =========
 
@@ -55,7 +46,6 @@ def _infer_agg(variable):
     return "sum" if any(a in v for a in {"precip","pr","precipitation","tp","rain"}) else "mean"
 
 def resample_to(ds, variable, freq):
-    """None or 'D' keeps original; 'W' weekly; 'MS' monthly start."""
     if (freq is None) or (str(freq).upper() == "D"):
         return ds
     how = _infer_agg(variable)
@@ -86,14 +76,12 @@ def stl_residual(values, times, period, robust=True, fill="mean"):
     if np.all(np.isnan(values)):
         return np.full_like(values, np.nan)
     ts = pd.Series(values, index=pd.to_datetime(times))
-
     if fill == "mean":
         filled = ts.fillna(ts.mean())
     elif fill == "linear":
         filled = ts.interpolate("time").fillna(ts.mean())
     else:
         raise ValueError("fill must be 'mean' or 'linear'")
-
     seasonal = max(7, min(int(round(period/4)), 61))
     trend    = max(2*period-1, 101)
     res = STL(filled, period=period, seasonal=seasonal, trend=trend, robust=robust).fit().resid
@@ -128,10 +116,6 @@ def rolling_ews_centered(ts, window):
 # ========= Kendall tau =========
 
 def kendall_tau_map(arr3):
-    """
-    arr3: (time, lat, lon) time series of an indicator.
-    Returns (tau_map, pval_map) shaped (lat, lon).
-    """
     nt, nlat, nlon = arr3.shape
     tau  = np.full((nlat, nlon), np.nan, dtype=np.float32)
     pval = np.full((nlat, nlon), np.nan, dtype=np.float32)
@@ -146,17 +130,29 @@ def kendall_tau_map(arr3):
             pval[i, j] = p
     return tau, pval
 
-def label_from_tau(tau_map, eps_tau):
+def label_from_tau_and_p(tau_map, p_map, eps_tau, p_alpha):
     """
-    Map tau to {-1, 0, +1} with absolute value <= eps considered neutral.
-    Missing tau remains missing and does not count as neutral.
+    Rules:
+      - if p > p_alpha -> neutral (0)
+      - else use sign of tau with epsilon threshold
+      - missing p or tau -> NaN (excluded from pairwise comparison)
     """
     tau = np.asarray(tau_map)
+    p   = np.asarray(p_map)
     lbl = np.full(tau.shape, np.nan, dtype=np.float32)
-    finite = np.isfinite(tau)
-    lbl[finite & (tau >  eps_tau)] =  1.0
-    lbl[finite & (tau < -eps_tau)] = -1.0
-    lbl[finite & (np.abs(tau) <= eps_tau)] = 0.0
+
+    finite_both = np.isfinite(tau) & np.isfinite(p)
+
+    # neutral by non-significance
+    neutral_mask = finite_both & (p > p_alpha)
+    lbl[neutral_mask] = 0.0
+
+    # significant: classify by tau magnitude and sign
+    sig_mask = finite_both & (p <= p_alpha)
+    lbl[sig_mask & (tau >  eps_tau)] =  1.0
+    lbl[sig_mask & (tau < -eps_tau)] = -1.0
+    lbl[sig_mask & (np.abs(tau) <= eps_tau)] = 0.0
+
     return lbl
 
 # ========= core compute for a tile =========
@@ -217,9 +213,7 @@ def load_tile(dataset_path, variable, freq_resample, i0, i1, j0, j1,
     if "time" not in ds:
         raise ValueError("Dataset has no time coordinate.")
     ds = ds.sel(time=slice(np.datetime64(t0), np.datetime64(t1)))
-
     ds_r = resample_to(ds, variable, freq_resample)
-
     da = ds_r[variable].isel(lat=slice(i0, i1), lon=slice(j0, j1)).transpose("time","lat","lon")
     raw3  = da.values
     times = pd.to_datetime(da["time"].values)
@@ -233,37 +227,20 @@ def safe_name(cfg):
 # ========= Cohen's kappa (pairwise) and Light's kappa =========
 
 def _pair_kappa_unweighted(a, b):
-    """
-    a, b: 1D arrays with values in {-1, 0, 1, NaN}
-    Returns unweighted Cohen's kappa.
-    Handles single-class cases and always passes the full label set.
-    """
     m = np.isfinite(a) & np.isfinite(b)
     if m.sum() == 0:
         return np.nan
-
     A = a[m].astype(int)
     B = b[m].astype(int)
-
-    # if both raters are constant (only one label each)
     ua = np.unique(A)
     ub = np.unique(B)
     if ua.size == 1 and ub.size == 1:
-        # same constant label → perfect agreement
         if ua[0] == ub[0]:
             return 1.0
-        # different constant labels → no agreement
         return 0.0
-
-    # general case; pass all labels to avoid warnings
     return cohen_kappa_score(A, B, labels=[-1, 0, 1])
 
-
 def kappa_matrix(label_maps):
-    """
-    label_maps: {config_tag: 2D label array with values in {-1, 0, 1, NaN}}
-    Returns a symmetric DataFrame of unweighted Cohen's kappa over all pairs.
-    """
     tags = list(label_maps.keys())
     n = len(tags)
     mat = np.full((n, n), np.nan, dtype=float)
@@ -281,10 +258,113 @@ def kappa_matrix(label_maps):
     return pd.DataFrame(mat, index=tags, columns=tags)
 
 def lights_kappa_from_matrix(kdf):
-    """Mean of the upper triangle excluding diagonal."""
     vals = kdf.where(~np.eye(len(kdf), dtype=bool)).to_numpy()
     uptri = vals[np.triu_indices_from(vals, k=1)]
     return float(np.nanmean(uptri)) if np.isfinite(uptri).any() else np.nan
+
+def kappa_distribution(kdf):
+    arr = kdf.to_numpy()
+    n = arr.shape[0]
+    up = arr[np.triu_indices(n, k=1)]
+    up = up[np.isfinite(up)]
+    if up.size == 0:
+        return np.nan, np.nan, np.nan
+    return float(np.percentile(up, 10)), float(np.median(up)), float(np.percentile(up, 90))
+
+def best_worst_pairs(kdf, top=3):
+    recs = []
+    idx = list(kdf.index)
+    for i in range(len(idx)):
+        for j in range(i+1, len(idx)):
+            recs.append((idx[i], idx[j], kdf.iat[i, j]))
+    df = pd.DataFrame(recs, columns=["a","b","kappa"]).dropna()
+    if df.empty:
+        return pd.DataFrame(columns=["a","b","kappa"]), pd.DataFrame(columns=["a","b","kappa"])
+    df_sorted = df.sort_values("kappa", ascending=False)
+    return df_sorted.head(top), df_sorted.tail(top)
+
+_tag_pat = re.compile(r"freq(?P<freq>W|MS)_win(?P<win>[\dp]+)y_diff(?P<diff>[01])_stl(?P<stl>[RN])")
+
+def parse_tag(tag):
+    m = _tag_pat.fullmatch(tag)
+    if not m:
+        return {"freq": None, "win": None, "diff": None, "stl": None}
+    d = m.groupdict()
+    d["win"] = d["win"].replace("p", ".")
+    return d
+
+def mean_when_only_one_factor_changes(kdf):
+    names = list(kdf.index)
+    meta = pd.DataFrame([parse_tag(n) for n in names], index=names)
+    recs = {"freq": [], "win": [], "diff": [], "stl": []}
+    for i in range(len(names)):
+        for j in range(i+1, len(names)):
+            a, b = names[i], names[j]
+            va, vb = meta.loc[a], meta.loc[b]
+            eq = [(va["freq"] == vb["freq"]),
+                  (va["win"]  == vb["win"]),
+                  (va["diff"] == vb["diff"]),
+                  (va["stl"]  == vb["stl"])]
+            if sum(eq) == 3:
+                if va["freq"] != vb["freq"]:
+                    recs["freq"].append(kdf.loc[a, b])
+                elif va["win"] != vb["win"]:
+                    recs["win"].append(kdf.loc[a, b])
+                elif va["diff"] != vb["diff"]:
+                    recs["diff"].append(kdf.loc[a, b])
+                elif va["stl"] != vb["stl"]:
+                    recs["stl"].append(kdf.loc[a, b])
+    out = {k: float(np.nanmean(v)) if len(v) else np.nan for k, v in recs.items()}
+    return pd.Series(out, name="mean_kappa_when_only_one_factor_changes")
+
+def lights_kappa_by_freq(kdf):
+    """Return Light's kappa computed on Weekly-only and Monthly-only config subsets."""
+    names = list(kdf.index)
+    meta = pd.DataFrame([parse_tag(n) for n in names], index=names)
+    out = {}
+    for freq in ["W", "MS"]:
+        idx = [n for n in names if meta.loc[n, "freq"] == freq]
+        if len(idx) >= 2:
+            sub = kdf.loc[idx, idx]
+            out[f"lights_kappa_{freq}"] = lights_kappa_from_matrix(sub)
+        else:
+            out[f"lights_kappa_{freq}"] = np.nan
+    return pd.Series(out)
+
+def mean_when_only_one_factor_changes_by_freq(kdf):
+    """
+    Like mean_when_only_one_factor_changes, but split into Weekly-only and Monthly-only.
+    Pairs differ in exactly one factor (win, diff, or stl) and share the same freq.
+    """
+    names = list(kdf.index)
+    meta = pd.DataFrame([parse_tag(n) for n in names], index=names)
+    buckets = {"W": {"win": [], "diff": [], "stl": []},
+               "MS": {"win": [], "diff": [], "stl": []}}
+    for i in range(len(names)):
+        for j in range(i+1, len(names)):
+            a, b = names[i], names[j]
+            va, vb = meta.loc[a], meta.loc[b]
+            if va["freq"] != vb["freq"]:
+                continue  # only within same frequency
+            eq = [(va["win"]  == vb["win"]),
+                  (va["diff"] == vb["diff"]),
+                  (va["stl"]  == vb["stl"])]
+            if sum(eq) == 2:  # differ in exactly one
+                if va["win"] != vb["win"]:
+                    buckets[va["freq"]]["win"].append(kdf.loc[a, b])
+                elif va["diff"] != vb["diff"]:
+                    buckets[va["freq"]]["diff"].append(kdf.loc[a, b])
+                elif va["stl"] != vb["stl"]:
+                    buckets[va["freq"]]["stl"].append(kdf.loc[a, b])
+    rows = []
+    for freq in ["W","MS"]:
+        rows.append({
+            "freq": freq,
+            "mean_kappa_win_changes":  float(np.nanmean(buckets[freq]["win"]))  if buckets[freq]["win"]  else np.nan,
+            "mean_kappa_diff_changes": float(np.nanmean(buckets[freq]["diff"])) if buckets[freq]["diff"] else np.nan,
+            "mean_kappa_stl_changes":  float(np.nanmean(buckets[freq]["stl"]))  if buckets[freq]["stl"]  else np.nan,
+        })
+    return pd.DataFrame(rows).set_index("freq")
 
 # ========= sensitivity driver =========
 
@@ -295,7 +375,9 @@ def run_sensitivity(dataset, variable, outdir,
                     diffs=(True, False),
                     stl_robust_opts=(True, False),
                     fill="mean",
-                    eps_tau=0.05):
+                    eps_tau=0.05,
+                    p_alpha=0.05,
+                    report_top_pairs=3):
     os.makedirs(outdir, exist_ok=True)
 
     SENSITIVITIES = []
@@ -311,7 +393,6 @@ def run_sensitivity(dataset, variable, outdir,
         cache[f] = (raw3, times)
 
     by_indicator_labels = { "ac1": {}, "std": {}, "skew": {}, "kurt": {}, "fd": {} }
-
     tau_summaries = []
 
     for cfg in SENSITIVITIES:
@@ -330,16 +411,16 @@ def run_sensitivity(dataset, variable, outdir,
                 "tau_mean": float(np.nanmean(tau)),
                 "tau_median": float(np.nanmedian(tau)),
                 "tau_std": float(np.nanstd(tau)),
-                "pct_pos": float(np.nanmean(tau >  eps_tau) * 100.0),
-                "pct_neg": float(np.nanmean(tau < -eps_tau) * 100.0),
-                "pct_neu": float(np.nanmean(np.abs(tau) <= eps_tau) * 100.0),
+                "pct_pos_tau_gt_eps": float(np.nanmean(tau >  eps_tau) * 100.0),
+                "pct_neg_tau_lt_minus_eps": float(np.nanmean(tau < -eps_tau) * 100.0),
+                "pct_neu_abs_tau_le_eps": float(np.nanmean(np.abs(tau) <= eps_tau) * 100.0),
+                "pct_p_greater_alpha": float(np.nanmean(p > p_alpha) * 100.0)
             })
 
         tag = safe_name(cfg)
         out_path = os.path.join(outdir, f"sensitivity_{variable}_{tag}_kt.zarr")
         if os.path.exists(out_path):
             import shutil; shutil.rmtree(out_path)
-
         kt_ds = xr.Dataset(
             data_vars={
                 "tau_ac1":  (("lat","lon"), tau_maps["ac1"]),
@@ -359,22 +440,65 @@ def run_sensitivity(dataset, variable, outdir,
         print("[OK] wrote", out_path)
 
         for ind in by_indicator_labels.keys():
-            by_indicator_labels[ind][tag] = label_from_tau(tau_maps[ind], eps_tau)
+            lbl = label_from_tau_and_p(tau_maps[ind], pval_maps[ind], eps_tau, p_alpha)
+            by_indicator_labels[ind][tag] = lbl
 
     df_tau = pd.DataFrame(tau_summaries)
     df_tau_path = os.path.join(outdir, f"{variable}_kt_summary.csv")
     df_tau.to_csv(df_tau_path, index=False)
     print("[DONE] tau summary saved to:", df_tau_path)
 
+    # Detailed kappa summaries and ranking per indicator
+    detail_rows = []
     lk_rows = []
+
     for ind, lbls in by_indicator_labels.items():
         kdf = kappa_matrix(lbls)
         kappa_csv = os.path.join(outdir, f"{variable}_cohens_kappa_{ind}.csv")
         kdf.to_csv(kappa_csv)
         print("[DONE] kappa matrix", ind, "saved to:", kappa_csv)
 
+        lk_byfreq = lights_kappa_by_freq(kdf)
+        byfreq_means = mean_when_only_one_factor_changes_by_freq(kdf)
+
         lk = lights_kappa_from_matrix(kdf)
+        p10, med, p90 = kappa_distribution(kdf)
+        best_df, worst_df = best_worst_pairs(kdf, top=report_top_pairs)
+        factor_means = mean_when_only_one_factor_changes(kdf)
+
+        # store detailed row for this indicator
+        detail_rows.append({
+            "indicator": ind,
+            "lights_kappa": lk,
+            "kappa_p10": p10,
+            "kappa_median": med,
+            "kappa_p90": p90,
+            "mean_kappa_when_only_freq_changes": factor_means.get("freq", np.nan),
+            "mean_kappa_when_only_win_changes":  factor_means.get("win",  np.nan),
+            "mean_kappa_when_only_diff_changes": factor_means.get("diff", np.nan),
+            "mean_kappa_when_only_stl_changes":  factor_means.get("stl",  np.nan),
+            "W_mean_kappa_win_changes":  byfreq_means.loc["W","mean_kappa_win_changes"],
+            "W_mean_kappa_diff_changes": byfreq_means.loc["W","mean_kappa_diff_changes"],
+            "W_mean_kappa_stl_changes":  byfreq_means.loc["W","mean_kappa_stl_changes"],
+            "MS_mean_kappa_win_changes":  byfreq_means.loc["MS","mean_kappa_win_changes"],
+            "MS_mean_kappa_diff_changes": byfreq_means.loc["MS","mean_kappa_diff_changes"],
+            "MS_mean_kappa_stl_changes":  byfreq_means.loc["MS","mean_kappa_stl_changes"],
+            "best_pair_1": best_df.iloc[0]["a"] if len(best_df) > 0 else "",
+            "best_pair_2": best_df.iloc[0]["b"] if len(best_df) > 0 else "",
+            "best_pair_kappa": float(best_df.iloc[0]["kappa"]) if len(best_df) > 0 else np.nan,
+            "worst_pair_1": worst_df.iloc[0]["a"] if len(worst_df) > 0 else "",
+            "worst_pair_2": worst_df.iloc[0]["b"] if len(worst_df) > 0 else "",
+            "worst_pair_kappa": float(worst_df.iloc[0]["kappa"]) if len(worst_df) > 0 else np.nan,
+            "n_configs": len(lbls),
+            "n_pairs": int(len(lbls) * (len(lbls) - 1) / 2)
+        })
+
         lk_rows.append({"indicator": ind, "lights_kappa": lk, "n_configs": len(lbls), "n_pairs": int(len(lbls)*(len(lbls)-1)/2)})
+
+    detail_df = pd.DataFrame(detail_rows).sort_values("lights_kappa", ascending=False)
+    detail_csv = os.path.join(outdir, f"{variable}_indicator_kappa_detail.csv")
+    detail_df.to_csv(detail_csv, index=False)
+    print("[DONE] indicator detail summary saved to:", detail_csv)
 
     lk_df = pd.DataFrame(lk_rows).sort_values("lights_kappa", ascending=False)
     lk_df["robustness_rank"] = np.arange(1, len(lk_df)+1)
@@ -385,7 +509,7 @@ def run_sensitivity(dataset, variable, outdir,
 # ========= CLI =========
 
 def main():
-    ap = argparse.ArgumentParser(description="Sensitivity via Kendall tau labels and Light's kappa including neutrals.")
+    ap = argparse.ArgumentParser(description="Sensitivity via Kendall tau labels and Light's kappa including neutrals, plus summaries.")
     ap.add_argument("--dataset",  required=True, help="Path to full dataset (zarr or netcdf)")
     ap.add_argument("--variable", required=True, help="Variable name (e.g., sm, Et, precip)")
     ap.add_argument("--outdir",   required=True, help="Output directory")
@@ -393,22 +517,15 @@ def main():
     ap.add_argument("--i1", type=int, default=50, help="lat end index (exclusive)")
     ap.add_argument("--j0", type=int, default=0, help="lon start index (inclusive)")
     ap.add_argument("--j1", type=int, default=50, help="lon end index (exclusive)")
-    ap.add_argument("--eps_tau", type=float, default=0.05, help="neutral threshold for tau (absolute value <= eps is 0)")
+    ap.add_argument("--eps_tau", type=float, default=0.05, help="neutral threshold for tau magnitude")
+    ap.add_argument("--p_alpha", type=float, default=0.05, help="p value threshold; p > alpha becomes neutral")
+    ap.add_argument("--report_top_pairs", type=int, default=3, help="how many best/worst pairs to record per indicator")
     args = ap.parse_args()
 
     run_sensitivity(args.dataset, args.variable, args.outdir,
                     i0=args.i0, i1=args.i1, j0=args.j0, j1=args.j1,
-                    eps_tau=args.eps_tau)
+                    eps_tau=args.eps_tau, p_alpha=args.p_alpha,
+                    report_top_pairs=args.report_top_pairs)
 
 if __name__ == "__main__":
     main()
-
-"""
-Example:
-python3 01c-sensitivity_tau_lightsk.py \
-  --dataset /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr \
-  --variable precip \
-  --outdir /mnt/data/romi/output/paper_1/output_precip_final \
-  --i0 270 --i1 320 --j0 470 --j1 520 \
-  --eps_tau 0.05
-"""
