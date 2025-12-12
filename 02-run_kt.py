@@ -45,7 +45,7 @@ python 250328_kendall_tau_new.py /mnt/data/romi/data/et_pot/aridity_index.zarr
 04.09.25 
 
 Updated for better parallelisation. Previously had one job per variable, now includes dask parallelisation. 
-Also adds an optional trimming CLI option to trim the last 2 
+Also adds an optional trimming CLI option to trim the last 2.5 years 
 
     E.g. positives
     python 02-run_kt.py --input /home/romi/ews/output/output_Et_final/out_Et_breakpoint_stc.zarr --dask-workers 16 --trim

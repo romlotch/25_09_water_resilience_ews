@@ -21,7 +21,7 @@ python3 01c-sensitivity_tau_lightsk.py \
 """
 
 
-# ========= helpers to open and prep =========
+# ----- open and prep helpers -----
 
 def open_source_ds(path):
     if os.path.isdir(path) and (os.path.exists(os.path.join(path, ".zgroup"))
@@ -70,7 +70,7 @@ def stl_period_for(times):
 def make_odd(n):
     return n if (n % 2 == 1) else (n + 1)
 
-# ========= STL detrend =========
+# ----- STL -----
 
 def stl_residual(values, times, period, robust=True, fill="mean"):
     if np.all(np.isnan(values)):
@@ -88,7 +88,7 @@ def stl_residual(values, times, period, robust=True, fill="mean"):
     res[ts.isna()] = np.nan
     return res.values
 
-# ========= rolling EWS =========
+# ----- Rolling EWS -----
 
 def rolling_ews_centered(ts, window):
     n = len(ts); half = window // 2
@@ -113,7 +113,7 @@ def rolling_ews_centered(ts, window):
                 out[4][k] = np.clip(fdv, 1, 2)
     return tuple(out)
 
-# ========= Kendall tau =========
+# ----- Kendall tau -----
 
 def kendall_tau_map(arr3):
     nt, nlat, nlon = arr3.shape
@@ -155,7 +155,7 @@ def label_from_tau_and_p(tau_map, p_map, eps_tau, p_alpha):
 
     return lbl
 
-# ========= core compute for a tile =========
+# ----- compute EWS for a tile -----
 
 def compute_ews_for_tile(raw3, times, freq, years_window,
                          do_diff=True, stl_robust=True, fill="mean"):
@@ -204,7 +204,6 @@ def compute_ews_for_tile(raw3, times, freq, years_window,
     coords = {"time": times, "lat": np.arange(nlat), "lon": np.arange(nlon)}
     return xr.Dataset(data_vars, coords=coords)
 
-# ========= tile I/O =========
 
 def load_tile(dataset_path, variable, freq_resample, i0, i1, j0, j1,
               t0="2000-01-01", t1="2023-12-31"):
@@ -224,7 +223,7 @@ def safe_name(cfg):
     tag = f"freq{cfg['freq']}_win{cfg['win_years']}y_diff{int(cfg['diff'])}_stl{'R' if cfg['stl_robust'] else 'N'}"
     return tag.replace(".","p")
 
-# ========= Cohen's kappa (pairwise) and Light's kappa =========
+# ----- Cohen's kappa and Light's kappa -----
 
 def _pair_kappa_unweighted(a, b):
     m = np.isfinite(a) & np.isfinite(b)
@@ -293,6 +292,8 @@ def parse_tag(tag):
     d["win"] = d["win"].replace("p", ".")
     return d
 
+
+
 def mean_when_only_one_factor_changes(kdf):
     names = list(kdf.index)
     meta = pd.DataFrame([parse_tag(n) for n in names], index=names)
@@ -317,6 +318,8 @@ def mean_when_only_one_factor_changes(kdf):
     out = {k: float(np.nanmean(v)) if len(v) else np.nan for k, v in recs.items()}
     return pd.Series(out, name="mean_kappa_when_only_one_factor_changes")
 
+
+
 def lights_kappa_by_freq(kdf):
     """Return Light's kappa computed on Weekly-only and Monthly-only config subsets."""
     names = list(kdf.index)
@@ -330,6 +333,8 @@ def lights_kappa_by_freq(kdf):
         else:
             out[f"lights_kappa_{freq}"] = np.nan
     return pd.Series(out)
+
+
 
 def mean_when_only_one_factor_changes_by_freq(kdf):
     """
@@ -366,7 +371,9 @@ def mean_when_only_one_factor_changes_by_freq(kdf):
         })
     return pd.DataFrame(rows).set_index("freq")
 
-# ========= sensitivity driver =========
+
+
+# ----- Run sensitivity -----
 
 def run_sensitivity(dataset, variable, outdir,
                     i0=0, i1=50, j0=0, j1=50,
@@ -448,7 +455,7 @@ def run_sensitivity(dataset, variable, outdir,
     df_tau.to_csv(df_tau_path, index=False)
     print("[DONE] tau summary saved to:", df_tau_path)
 
-    # Detailed kappa summaries and ranking per indicator
+    # Kappa summaries and ranking per indicator
     detail_rows = []
     lk_rows = []
 
@@ -466,7 +473,7 @@ def run_sensitivity(dataset, variable, outdir,
         best_df, worst_df = best_worst_pairs(kdf, top=report_top_pairs)
         factor_means = mean_when_only_one_factor_changes(kdf)
 
-        # store detailed row for this indicator
+        # store detailed row for indicator
         detail_rows.append({
             "indicator": ind,
             "lights_kappa": lk,
@@ -506,7 +513,7 @@ def run_sensitivity(dataset, variable, outdir,
     lk_df.to_csv(lk_csv, index=False)
     print("[DONE] Light's kappa summary saved to:", lk_csv)
 
-# ========= CLI =========
+# CLI
 
 def main():
     ap = argparse.ArgumentParser(description="Sensitivity via Kendall tau labels and Light's kappa including neutrals, plus summaries.")

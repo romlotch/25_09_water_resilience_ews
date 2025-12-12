@@ -54,8 +54,9 @@ def merge_ews_tiles(output_dir: str, var: str, suffix: str | None = None) -> Non
     ds = xr.combine_by_coords(tiles, combine_attrs="drop_conflicts")
     ds = ds.chunk({"lat": -1, "lon": -1, "time": -1})
 
+    ## Hardcoded outath
     sfx = _format_suffix(suffix)
-    out_path = f"/mnt/data/romi/output/paper_1/output_{var}_final/out_{var}{sfx}.zarr"              ### change this to your own dir
+    out_path = f"/mnt/data/romi/output/paper_1/output_{var}_final/out_{var}{sfx}.zarr"             
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     print(f"Writing: {out_path}")

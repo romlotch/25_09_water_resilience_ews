@@ -129,7 +129,6 @@ def plot_deltas(ds, var_name, out_path):
 
 
         # Save the colorbar 
-
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))  # Adjust size as needed
 
         norm = plt.Normalize(vmin=vmin, vmax=vmax)

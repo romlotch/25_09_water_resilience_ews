@@ -8,7 +8,9 @@ import seaborn as sn
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import geopandas as gpd
-import rioxarray  # for .rio
+import rioxarray  
+import matplotlib.colors as mcolors
+from collections import OrderedDict
 
 """ 
 Plots bar graphs of the percentage of land area of increasing or decreasing indicators. 
@@ -20,6 +22,39 @@ E.g.
     python 02b-plot_biomes.py --dataset /mnt/data/romi/output/paper_1/output_precip_final/out_precip_kt.zarr --var 'precip' --outdir /mnt/data/romi/figures/paper_1/results_final/figure_2 --mode combined
  
 """
+
+# ----- shared colours & sizes to match kt map script) -----
+
+MM_TO_IN = 1.0 / 25.4
+
+FIGSIZE_COMBINED = (
+    100.327 * MM_TO_IN,  # width in inches
+    40.0 * MM_TO_IN      # height in inches
+)
+
+PINK = "#82315E"   
+GREEN = "#256D15" 
+
+PINK_SOFT = sn.desaturate(PINK, 0.95)
+GREEN_SOFT = sn.desaturate(GREEN, 0.95)
+
+NEUTRAL_COLOR = "#c4c4c4"  # for neutral
+
+# mixed = overlap of pink & green in RGB space (edit in affinity)
+_mixed_rgb = (
+    np.array(mcolors.to_rgb(PINK_SOFT)) +
+    np.array(mcolors.to_rgb(GREEN_SOFT))
+) / 2.0
+MIXED_COLOR = mcolors.to_hex(_mixed_rgb)
+
+# colours for indicator mode (Decrease/Neutral/Increase)
+INDICATOR_COLORS = {
+    "Decrease": PINK_SOFT,
+    "Neutral":  NEUTRAL_COLOR,
+    "Increase": GREEN_SOFT,
+}
+
+
 
 # --- CLI ---
 def parse_args():
@@ -120,7 +155,6 @@ groups_plot = [
 ]
 
 
-from collections import OrderedDict
 
 def combined_family_masks(ds, prefix):
     """
@@ -283,7 +317,7 @@ def main():
     prefix = args.var  # e.g., "sm", "Et", "precip"
 
     IRRIG_PATH = "/mnt/data/romi/data/driver_analysis/global_irrigated_areas.zarr"
-    IRRIG_THRESH_PERCENT = 60.0  # AEI > 60% => considered irrigated and excluded from cropland biome
+    IRRIG_THRESH_PERCENT = 60.0  # AEI > 60% = considered irrigated and excluded from cropland biome
 
     irrig_ds = xr.open_dataset(IRRIG_PATH).rio.write_crs("EPSG:4326").interp_like(ds, method="nearest")
     if len(irrig_ds.data_vars) == 0:
@@ -298,13 +332,14 @@ def main():
     # base cropland mask 
     crop_only = (crop_mask > 25) & ((urban_mask <= 3) | urban_mask.isnull())
 
-    # --- rain-fed cropland (what we will use for the cropland biome) ---
+    # rain-fed cropland (what we will use for the cropland biome)
     irrigated = (irrig_frac >= IRRIG_THRESH_PERCENT / 100.0)
     rainfed_cropland = crop_only & (~irrigated | irrigated.isnull())
         
-    
+    # ---------- INDIVIDUAL INDICATORS  ----------
+
     if args.mode == "indicators":
-        # ---------- INDIVIDUAL INDICATORS  ----------
+       
         group_totals = {k: {g: {"dec":0.0,"neu":0.0,"inc":0.0,"tot":0.0} for g in groups_plot} for k,_ in indicators}
 
         # natural biomes → grouped
@@ -409,7 +444,8 @@ def main():
         return
 
 
-    # --- COMBINED SIGNALS (single panels % of total biome land area) ---
+    # ---------- COMBINED INDICATORS  ----------
+
     families = combined_family_masks(ds, prefix)
 
     # Land-sea mask for denominators
@@ -508,13 +544,36 @@ def main():
         df = df.sort_values("Group")
         family_dfs[fam_name] = df
 
-    # --- Plot ---
-    sn.set_style("whitegrid")
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
-    RED   = "#cd5d5dff"
-    BLUE  = "#64afc9ff"
-    GREY  = "#bab9b9"
+
+    # ----- Plot ------
+
+    sn.set_style("whitegrid")
+
+    # Target size
+    MM_TO_INCH = 1.0 / 25.4
+    FIG_W_MM = 118
+    FIG_H_MM = 35
+    FIGSIZE_COMBINED = (FIG_W_MM * MM_TO_INCH, FIG_H_MM * MM_TO_INCH)
+
+    # Create figure 
+    fig, axes = plt.subplots(
+        1, 3,
+        figsize=FIGSIZE_COMBINED,
+        sharey=True,
+        gridspec_kw=dict(
+            left=0.36,   # space for y-tick labels
+            right=0.98,
+            bottom=0.22, # space for x-tick labels
+            top=0.88,    # space for titles
+            wspace=0.18  # panels close but not overlapping
+        ),
+    )
+
+    RED   = "#64875C"
+    BLUE  = "#B36E94"
+    GREY  = "#574839"
+
 
     family_order = ["AC1 & SD", "Fractal dimension", "Flickering (Skew & Kurt)"]
     category_colors = {
@@ -536,7 +595,7 @@ def main():
 
     for ax, fam_name in zip(axes, family_order):
         dfp = family_dfs[fam_name].copy()
-        cat_names = list(families[fam_name].keys())  # preserves order 
+        cat_names = list(families[fam_name].keys())  # preserve order
 
         left = np.zeros(len(dfp))
         for cn in cat_names:
@@ -546,27 +605,54 @@ def main():
                 left=left,
                 color=category_colors[fam_name][cn],
                 edgecolor="none",
-                height=0.87,
-                label=cn
+                height=0.90,  # bars close
             )
             left += dfp[cn].to_numpy()
 
-        ax.set_title(fam_name, fontsize=13, pad=8)
-        ax.set_xlim(0, 100)  
-        ax.set_xlabel("% of total biome land area")
+        ax.set_title(fam_name, fontsize=8, pad=4)
+
+        ax.set_xlim(0, 100)
+        ax.set_xticks([0, 20, 40, 60, 80, 100])
+
+        ax.set_xlabel("")
+        ax.tick_params(axis="y", labelsize=7)
+        ax.tick_params(axis="x", labelsize=6)
+
         ax.grid(False)
 
+    # Shared y means inverting on one inverts all
     axes[0].invert_yaxis()
+
+    axes[1].tick_params(axis="y", labelleft=False)
+    axes[2].tick_params(axis="y", labelleft=False)
+
     for ax in axes:
-        ax.tick_params(axis="y", labelsize=12)
         sn.despine(ax=ax, top=True, right=True, bottom=True, left=True)
         ax.margins(y=0.02)
-        ax.legend(frameon=False, fontsize=9, loc="lower right")
+      
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.set_visible(False)
 
-    plt.tight_layout()
     out_svg = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families.svg")
-    fig.savefig(out_svg, format="svg", dpi=300, bbox_inches="tight", facecolor="white")
-    plt.show()
+    fig.savefig(
+        out_svg,
+        format="svg",
+        dpi=450,
+        bbox_inches=None,
+        pad_inches=0.0,
+        facecolor="white",
+    )
+
+    out_pdf = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families.pdf")
+    fig.savefig(
+        out_pdf,
+        format="pdf",
+        dpi=450,
+        bbox_inches=None,
+        pad_inches=0.0,
+        facecolor="white",
+    )
     plt.close(fig)
 
     def clean_label(label: str) -> str:
@@ -602,6 +688,7 @@ if __name__ == "__main__":
     sn.set_style("white")
     plt.rcParams['font.family'] = 'DejaVu Sans'
     mpl.rcParams['pdf.fonttype'] = 42 
+    mpl.rcParams["ps.fonttype"] = 42
     mpl.rcParams['svg.fonttype'] = 'none'
 
 

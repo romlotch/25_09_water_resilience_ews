@@ -38,7 +38,7 @@ Saves
 
 
 def open_source_ds(path):
-    # check:is this a zarr directory?
+   
     if os.path.isdir(path) and (
         os.path.exists(os.path.join(path, ".zgroup")) or
         os.path.exists(os.path.join(path, ".zmetadata"))
@@ -46,6 +46,7 @@ def open_source_ds(path):
         return xr.open_zarr(path)
     else:
         return xr.open_dataset(path)
+
 
 def standardize_lat_lon(ds):
     """Rename dims to lat, lon, time, set projection and centre on 0 instead of 180"""
