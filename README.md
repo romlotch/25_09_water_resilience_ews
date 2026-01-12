@@ -10,15 +10,20 @@ This repository reproduces Figs. 1 - 6, Extended Data Figs A1 and A2, and Supple
 
 If you use this code, please cite the paper.
 
-# Full reproduction workflow: 
+## Reproduction workflow
 
 ```
+# Install required packages
 python -m venv .venv
 source .venv/bin/activate # mac/linux
 .venv\Scripts\activate    # windows 
 pip install -r requirements.txt
 
 ```
+
+### Run EWS 
+
+
 
 
 
