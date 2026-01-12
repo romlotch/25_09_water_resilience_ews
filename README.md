@@ -40,7 +40,7 @@ Key packages used:
 
 ---
 
-## Configuration
+## Setup
 
 ```
 # Install required packages
@@ -51,6 +51,8 @@ source .venv/bin/activate # mac/linux
 pip install -r requirements.txt
 
 ```
+
+## Configuration
 
 Original scripts used hard-coded paths (e.g., large data, land masks, biome shapefiles). To make the repo portable, put all machine-specific paths into a local config file:
 
@@ -89,7 +91,7 @@ The workflow is run per variable: ```sm```, ```Et```, ```precip```. The workflow
    # E.g:
    python 01a-combine_ews_output.py --output_dir processed_tiles_sm --variable sm
 
-   # Outputs are saved to: outputs/zarr/
+   # Output path is defined inside 01a-* (edit or use config)
 ```
 
 ### 3. Plot EWS delta maps (S3):
@@ -110,7 +112,7 @@ python 01c-sensitivity.py --dataset <PATH_TO_out_sm.zarr> --variable sm --outdir
 
 ```
 
-### 3. Compute Kendall tau:
+### 5. Compute Kendall tau:
 
 ```
 python 02-run_kt.py --input <PATH_TO_out_sm.zarr> --workers 8
@@ -118,7 +120,7 @@ python 02-run_kt.py --input <PATH_TO_out_sm.zarr> --workers 8
    out_sm_kt.zarr
 ```
 
-### 4. Plot Kendall Tau and biome-level summaries (Figs. 2 - 4, S2):
+### 6. Plot Kendall Tau and biome-level summaries (Figs. 2 - 4, S2):
 
 ```
 python 02a-plot_kt.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir outputs/figures/kt/sm/
@@ -126,8 +128,9 @@ python 02b-plot_biomes.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir o
 
 ```
 
-### 5. Abrupt shift (changepoint) detection and plotting (Fig. 1):
+### 7. Abrupt shift (changepoint) detection and plotting (Fig. 1):
 
+Repeat the pre-break / pre–pseudo-break reruns for whichever breakpoint test you analyze (stc, pettitt, or var).
 
 ```
 python 03-run_changepoints.py --fp <PATH_TO_RAW_INPUT_NETCDF_OR_ZARR> --var sm
@@ -147,7 +150,7 @@ Plot cummulative area with abrupt shifts (S7; all variables):
 python 03c-plot_cumulative_abrupt_shift.py --test stc --outdir outputs/figures/abrupt_cumulative/
 ```
 
-### 6. Alternative trend metrics (Theil-Sen and mean change) + agreement (S4, S5, S6): 
+### 8. Alternative trend metrics (Theil-Sen and mean change) + agreement (S4, S5, S6): 
 
 ```
 python 04-run_theil_sen.py --input <PATH_TO_out_sm.zarr> --workers 8 --alpha 0.05
@@ -164,33 +167,125 @@ python 04c-plot_mean_change.py --dataset_path <PATH_TO_out_sm_meanchange.zarr> -
 04d-agreement.py
 ```
    
-### 7. Breakpoint masking + true positive evaluation: 
+### 9. Breakpoint masking + true positive evaluation (ML pre-requisites): 
 
-```python 05-mask_breakpoints.py --ews_ds_path <PATH_TO_out_sm.zarr> --var sm --out_dir outputs/zarr/masked/``` 
+Create masked raw datasets (positives = true breakpoints; negatives = pseudo-breakpoints):
+
 ```
-# Plot true positives
+python 05-mask_breakpoints.py --ews_ds_path <PATH_TO_out_sm.zarr> --var sm --out_dir outputs/zarr/masked/
+```
+
+This writes (in --out_dir), for each breakpoint test and combined: 
+
+Positives (real breakpoints; late-enough + significant)
+
+- <var>_cp_masked_pettitt.zarr
+- <var>_cp_masked_stc.zarr
+- <var>_cp_masked_var.zarr
+- <var>_cp_masked_all.zarr
+- 
+Negatives trimmed at pesudo-breakpoints (pseudo-break times sampled from the positive breakpoint-time distribution; seed fixed in script; suffix default is "neg"):
+
+- <var>_cp_masked_pettitt_neg.zarr
+- <var>_cp_masked_stc_neg.zarr
+- <var>_cp_masked_var_neg.zarr
+
+**Important**: these outputs contain the raw variable time series only (trimmed to ≤ breakpoint time). You must rerun EWS on them. 
+Repeat steps 1-3 for both the positives and negatives: 
+
+#### Positives:
+
+```
+# EWS 
+python 01-run_ews.py \
+  --dataset <OUTPUT_DIR>/<var>_cp_masked_stc.zarr \
+  --variable <var> \
+  --freq W \
+  --out <var>_breakpoints
+```
+This creates: 
+- tiled outputs in `processed_tiles_<var>_breakpoints/`
+
+```
+# Merge
+python 01a-combine_ews_output.py \
+  --output_dir processed_tiles_<var>_breakpoints \
+  --variable <var> \
+  --suffix breakpoint_stc
+```
+This produces: 
+- `out_<var>_breakpoint_stc.zarr`
+  
+```
+# Kendall Tau
+python 02-run_kt.py --input <PATH_TO_out_var_breakpoint_stc.zarr> --workers 8
+```
+This produces: 
+- `out_<var>_breakpoint_stc_kt.zarr` which is --tau_pre
+
+#### Negatives:
+
+```
+# EWS 
+python 01-run_ews.py \
+  --dataset <OUTPUT_DIR>/<var>_cp_masked_stc_neg.zarr \
+  --variable <var> \
+  --freq W \
+  --out <var>_breakpoints_neg
+```
+This creates: 
+- tiled outputs in `processed_tiles_<var>_breakpoints_neg/`
+
+```
+# Merge
+python 01a-combine_ews_output.py \
+  --output_dir processed_tiles_<var>_breakpoints_neg \
+  --variable <var> \
+  --suffix breakpoint_stc_neg
+```
+This produces: 
+- `out_<var>_breakpoint_stc_neg.zarr`
+  
+```
+# Kendall Tau
+python 02-run_kt.py --input <PATH_TO_out_var_breakpoint_stc_neg.zarr> --workers 8
+```
+This produces: 
+- `out_<var>_breakpoint_stc_kt_neg.zarr` which is --tau_pre_neg
+
+
+
+```
+# Plot positives/negatives
 python 05a-plot_true_positives.py --ews_kt_path <PATH_TO_out_sm_kt.zarr> --ds_cp_path <PATH_TO_CHGPOINT_ZARR> --var sm --out_dir outputs/figures/true_positives/sm/
 ```
 
-### 8a. Build predictor layers: 
+### 10a. Build predictor layers: 
 
 ```
 python 06a-preprocess_rf_drivers.py
 # Output: driver layers as Zarr stores (temperature, precipitation, soil moisture, PET, aridity, ENSO correlation, etc.).
 ```
 
-### 8b. Fit classifier (XGBoost + SHAP)
+### 10b. Fit classifier and plot results (XGBoost + SHAP; Fig. 5, Extended Data A1, A2, S10-14)
 
+The classifier in 06b-run_random_forest.py does not use Kendall’s tau computed on the full time series alone. To avoid leakage and to ensure comparable time support, it uses:
+- tau_full: Kendall’s tau computed from EWS indicator time series on the full record (02-run_kt.py run on out_<var>.zarr)
+- tau_pre (positives): Kendall’s tau computed from EWS indicator time series recomputed using only the period before the detected breakpoint
+- tau_pre_neg (negatives): Kendall’s tau computed from EWS indicator time series recomputed using only the period before a pseudo-breakpoint, where pseudo-breakpoints are sampled from the empirical distribution of positive breakpoint times (per breakpoint test; seed fixed in 05-mask_breakpoints.py)
+- 
+This means you must run a second EWS + Kendall τ pass for positives and a third EWS + Kendall τ pass for negatives (pseudo-breaks). These are required inputs to the ML script.
 ```
 python 06b-run_random_forest.py \
-  --tau_full <PATH_TO_out_sm_kt.zarr> \
-  --tau_pre <PATH_TO_PREBREAK_POS_KT> \
-  --tau_pre_neg <PATH_TO_PREBREAK_NEG_KT> \
-  --breaks <PATH_TO_CHGPOINT_ZARR> \
-  --var sm \
-  --cp_test stc \
-  --outdir outputs/ml
+  --tau_full     <PATH_TO_out_var_kt.zarr> \
+  --tau_pre      <PATH_TO_out_var_breakpoint_stc_kt.zarr> \
+  --tau_pre_neg  <PATH_TO_out_var_breakpoint_stc_neg_kt.zarr> \
+  --breaks       <PATH_TO_out_var_chp.zarr> \
+  --var          <sm|Et|precip> \
+  --cp_test      stc \
+  --outdir       outputs/ml
 ```
+
 
 ## Script index (01–06)
 EWS + merge:
@@ -214,8 +309,6 @@ Abrupt shifts:
 
 Evaluation:
 - 05-mask_breakpoints.py (mask positives + pseudo-break negatives)
-- 05a-plot_true_positives.py (main evaluation plots)
-- 05a-plot_true_positives_aridity_pre.py (aridity stratification)
 
 ML:
 - 06a-preprocess_rf_drivers.py (drivers)
