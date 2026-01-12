@@ -43,12 +43,30 @@ Note: config.yaml is not tracked by git.
 
 1. Compute EWS tiles and merge
 
-```01-run_ews.py``` ```01a-combine_ews_output.py```
+```01-run_ews.py``` 
+```01a-combine_ews_output.py```
 
-3. Detect abrupt shifts (03-run_changepoints.py)
-4. Compute trend metrics (02-run_kt.py, 04-run_theil_sen.py, 04b-run_mean_change.py)
-5. Plot figures (01b-plot_deltas.py, 02a-plot_kt.py, 03c-plot_cumulative_abrupt_shift.py, etc.)
-6. Ground-truth evaluation and breakpoint masking (05-mask_breakpoints.py, 05a-plot_true_positives.py)
+2. Detect abrupt shifts
+
+```03-run_changepoints.py```
+
+3. Compute trend metrics
+
+```02-run_kt.py``` 
+```04-run_theil_sen.py```
+```04b-run_mean_change.py```
+   
+4. Plot figures
+
+```01b-plot_deltas.py``` 
+```02a-plot_kt.py```
+```03c-plot_cumulative_abrupt_shift.py```
+etc.
+
+5. Ground-truth evaluation and breakpoint masking
+
+```05-mask_breakpoints.py``` 
+```05a-plot_true_positives.py```
 
 
 
