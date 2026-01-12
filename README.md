@@ -2,7 +2,7 @@
 
 This repository contains code to reproduce the analyses and figures for: 
 
-** R. Lotcheris, N. Knecht, L. Wang-Erlansson, J. Rocha. (submitted to Nature Water). Global assessment of terrestrial water cycle resilience. Preprint DOI: https://eartharxiv.org/repository/view/11409/. **
+R. Lotcheris, N. Knecht, L. Wang-Erlansson, J. Rocha. (submitted to Nature Water). Global assessment of terrestrial water cycle resilience. Preprint DOI: https://eartharxiv.org/repository/view/11409/.
 
 This repository reproduces Figs. 1 - 6, Extended Data Figs A1 and A2, and Supplementary Materials S1 to S14. 
 
