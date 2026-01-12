@@ -10,7 +10,7 @@ All data for this publication was retrieved from publicly available, open datase
 
 If you use this code, please cite the paper.
 
-## Reproduction workflow
+## Configuration 
 
 ```
 # Install required packages
@@ -22,9 +22,8 @@ pip install -r requirements.txt
 
 ```
 
-### Configuration 
-
 The coded uses a local config file for file paths (e.g., large data, land masks, biome shapefiles). 
+
 1. Copy the example config and edit hardcoded filepaths as needed.
 
 ```
@@ -39,7 +38,7 @@ cp config.example.yaml config.yaml
 
 Note: config.yaml is not tracked by git. 
 
-### Running the pipeline 
+## Reproduction workflow
 
 1. Compute EWS tiles and merge
 
