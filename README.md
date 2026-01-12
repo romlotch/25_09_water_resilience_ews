@@ -4,13 +4,43 @@ This repository contains code to reproduce the analyses and figures for:
 
 R. Lotcheris, N. Knecht, L. Wang-Erlansson, J. Rocha. (submitted to Nature Water). Global assessment of terrestrial water cycle resilience. Preprint DOI: https://eartharxiv.org/repository/view/11409/.
 
-This repository reproduces Figs. 1 - 5, Extended Data Figs A1 and A2, and Supplementary Materials S1 to S14. 
+We assess the resilience of green water variables (transpiration, soil moisture, and precipitation) using early warning signals (EWS) and breakpoint detection on remotely sensed time series data. This repository reproduces Figs. 1 - 5, Extended Data Figs A1 and A2, and Supplementary Materials S1 to S14. All data for this publication was retrieved from publicly available, open datasets. Data sources are listed in the manuscript under the heading 'Data Availability'. 
 
-All data for this publication was retrieved from publicly available, open datasets. Data sources are listed in the manuscript under the heading 'Data Availability'. 
+The code is organized as a set of scripts (01–06) that:
+1) compute rolling EWS indicators on gridded time series,
+2) quantify trends in EWS using Kendall’s tau and additional trend estimators
+3) detect abrupt shifts via changepoint / structural break tests,
+4) evaluate EWS vs detected shifts (“ground-truth” evaluation),
+5) fit an ML model to explain/predict abrupt shifts using environmental drivers.
+
 
 If you use this code, please cite the paper.
 
-## Configuration 
+
+---
+
+## Environment / dependencies
+
+### Python
+Tested with Python 3.10.
+
+Key packages used:
+- numpy, pandas, xarray, dask, zarr
+- scipy, statsmodels
+- matplotlib, seaborn
+- cartopy (global maps)
+- rasterio, rioxarray (geospatial I/O)
+- geopandas, shapely (biomes)
+- scikit-learn (metrics, utilities)
+- xgboost + shap (ML script 06b)
+
+### R (required for changepoint analysis)
+`03-run_changepoints.py` uses `rpy2` and requires R installed, plus R packages:
+- `trend`, `strucchange`, `imputeTS`, `dplyr`, `tibble`, `changepoint`
+
+---
+
+## Configuration
 
 ```
 # Install required packages
@@ -22,7 +52,7 @@ pip install -r requirements.txt
 
 ```
 
-The coded uses a local config file for file paths (e.g., large data, land masks, biome shapefiles). 
+Original scripts used hard-coded paths (e.g., large data, land masks, biome shapefiles). To make the repo portable, put all machine-specific paths into a local config file:
 
 1. Copy the example config and edit hardcoded filepaths as needed.
 
@@ -38,34 +68,154 @@ cp config.example.yaml config.yaml
 
 Note: config.yaml is not tracked by git. 
 
+
 ## Reproduction workflow
 
-1. Compute EWS tiles and merge
+The workflow is run per variable: ```sm```, ```Et```, ```precip```. 
 
-```01-run_ews.py``` 
-```01a-combine_ews_output.py```
+### 1. Compute rolling EWS per tile
 
-2. Detect abrupt shifts
+```
+   # Script: 01-run_ews.py
+   # E.g: 
+   python 01-run_ews.py --dataset <INPUT_DATASET> --variable sm --freq W --window_years 5 --out sm --workers 8
 
-```03-run_changepoints.py```
+   # Outputs are saved to: processed_tiles_sm/*.zarr
+```
+### 2. Merge tiles: 
 
-3. Compute trend metrics
+```
+   # Script: 01a-combine_ews_output.py
+   # E.g:
+   python 01a-combine_ews_output.py --output_dir processed_tiles_sm --variable sm
 
-```02-run_kt.py``` 
-```04-run_theil_sen.py```
-```04b-run_mean_change.py```
+   # Outputs are saved to: outputs/zarr/
+```
+
+### 3. Plot EWS delta maps (S3):
    
-4. Plot figures
+```
+python 01b-plot_deltas.py --dataset_path <PATH_TO_out_sm.zarr> --variable sm --output_path outputs/figures/deltas/sm/
+# NB: output path must end with /. 
+```
 
-```01b-plot_deltas.py``` 
-```02a-plot_kt.py```
-```03c-plot_cumulative_abrupt_shift.py```
-etc.
+### 4. Sensitivity analysis (S1):
 
-5. Ground-truth evaluation and breakpoint masking
+```
+python 01c-sensitivity.py --dataset <PATH_TO_out_sm.zarr> --variable sm --outdir outputs/tables/sensitivity/sm/ --i0 0 --i1 50 --j0 0 --j1 50
+# Outputs:
+#    Kappa (agreement) matrices per indicator
+#    Light's kappa summaries
+#    Kendall tau summaries per configuration 
 
-```05-mask_breakpoints.py``` 
-```05a-plot_true_positives.py```
+```
+
+### 3. Compute Kendall tau:
+
+```
+python 02-run_kt.py --input <PATH_TO_out_sm.zarr> --workers 8
+# Output:
+   out_sm_kt.zarr
+```
+
+### 4. Plot Kendall Tau and biome-level summaries (Figs. 2 - 4, S2):
+
+```
+python 02a-plot_kt.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir outputs/figures/kt/sm/
+python 02b-plot_biomes.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir outputs/figures/biomes/sm/ --mode indicators
+
+```
+
+### 5. Abrupt shift (changepoint) detection and plotting (Fig. 1):
+
+
+```
+python 03-run_changepoints.py --fp <PATH_TO_RAW_INPUT_NETCDF_OR_ZARR> --var sm
+python 03a-plot_changepoints.py --dataset_path <PATH_TO_CHGPOINT_ZARR> --var sm --out_dir outputs/figures/changepoints/sm/
+
+```
+
+Plot example time series with abrupt shifts (Fig. 6): 
+
+```
+python 03b-plot_example_abrupt_shift.py --raw <PATH_TO_out_sm.zarr> --chp <PATH_TO_CHGPOINT_ZARR> --var sm --outdir outputs/figures/abrupt_examples/sm/ --n 12
+```
+
+Plot cummulative area with abrupt shifts (S7; all variables): 
+
+```
+python 03c-plot_cumulative_abrupt_shift.py --test stc --outdir outputs/figures/abrupt_cumulative/
+```
+
+### 6. Alternative trend metrics (Theil-Sen and mean change) + agreement (S4, S5, S6): 
+
+```
+python 04-run_theil_sen.py --input <PATH_TO_out_sm.zarr> --workers 8 --alpha 0.05
+python 04a-plot_theil_sen.py --dataset_path <PATH_TO_out_sm_ts.zarr> --variable sm --output_path outputs/figures/theil_sen/sm/
+```
+
+```
+python 04b-run_mean_change.py --input <PATH_TO_out_sm.zarr> --workers 8 --alpha 0.05
+python 04c-plot_mean_change.py --dataset_path <PATH_TO_out_sm_meanchange.zarr> --variable sm --output_path outputs/figures/mean_change/sm/
+# NB: output path must end with / 
+```
+
+```
+04d-agreement.py
+```
+   
+### 7. Breakpoint masking + true positive evaluation: 
+
+```python 05-mask_breakpoints.py --ews_ds_path <PATH_TO_out_sm.zarr> --var sm --out_dir outputs/zarr/masked/``` 
+```
+# Plot true positives
+python 05a-plot_true_positives.py --ews_kt_path <PATH_TO_out_sm_kt.zarr> --ds_cp_path <PATH_TO_CHGPOINT_ZARR> --var sm --out_dir outputs/figures/true_positives/sm/
+```
+
+### 8a. Build predictor layers: 
+
+```
+python 06a-preprocess_rf_drivers.py
+# Output: driver layers as Zarr stores (temperature, precipitation, soil moisture, PET, aridity, ENSO correlation, etc.).
+```
+
+### 8b. Fit classifier (XGBoost + SHAP)
+
+```
+python 06b-run_random_forest.py \
+  --tau_full <PATH_TO_out_sm_kt.zarr> \
+  --tau_pre <PATH_TO_PREBREAK_POS_KT> \
+  --tau_pre_neg <PATH_TO_PREBREAK_NEG_KT> \
+  --breaks <PATH_TO_CHGPOINT_ZARR> \
+  --var sm \
+  --cp_test stc \
+  --outdir outputs/ml
+```
+
+## Script index (01–06)
+EWS + merge:
+- 01-run_ews.py (tile EWS computation)
+- 01a-combine_ews_output.py (merge tiles)
+- 01b-plot_deltas.py (delta maps)
+- 01c-sensitivity.py (sensitivity + κ agreement)
+Trend metrics:
+- 02-run_kt.py + 02a-plot_kt.py (Kendall τ + maps)
+- 02b-plot_biomes.py (biome summaries)
+- 04-run_theil_sen.py + 04a-plot_theil_sen.py (Theil–Sen)
+- 04b-run_mean_change.py + 04c-plot_mean_change.py (mean change)
+- 04d-agreement.py (agreement; dev)
+Abrupt shifts:
+- 03-run_changepoints.py (rpy2 + R)
+- 03a-plot_changepoints.py (maps)
+- 03b-plot_example_abrupt_shift.py (example time series)
+- 03c-plot_cumulative_abrupt_shift.py (cumulative area)
+Evaluation:
+- 05-mask_breakpoints.py (mask positives + pseudo-break negatives)
+- 05a-plot_true_positives.py (main evaluation plots)
+- 05a-plot_true_positives_aridity_pre.py (aridity stratification)
+ML:
+- 06a-preprocess_rf_drivers.py (drivers)
+- 06b-run_random_forest.py (XGBoost classifier)
 
 
 
