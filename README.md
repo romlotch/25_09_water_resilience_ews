@@ -31,10 +31,10 @@ cp config.example.yaml config.yaml
 ```
 
 2. Edit ```config.yaml``` to point to:
-- land/sea mask (resources.landsea_mask_grib)
-- biome shapefile (resources.tnc_biomes_shapefile)
-- monthly precip + PET inputs (for aridity; resources.era5_precip_monthly_nc, resources.pet_monthly_zarr)
-- locations of produced Zarr outputs (datasets.*)
+- land/sea mask (```resources.landsea_mask_grib```)
+- biome shapefile (```resources.tnc_biomes_shapefile```)
+- monthly precip + PET inputs (for aridity; ```resources.era5_precip_monthly_nc```, ```resources.pet_monthly_zarr```)
+- locations of produced Zarr outputs (```datasets.*```)
 
 Note: config.yaml is not tracked by git. 
 
