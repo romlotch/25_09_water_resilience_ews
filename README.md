@@ -71,7 +71,7 @@ Note: config.yaml is not tracked by git.
 
 ## Reproduction workflow
 
-The workflow is run per variable: ```sm```, ```Et```, ```precip```. 
+The workflow is run per variable: ```sm```, ```Et```, ```precip```. The workflow here is described using sm as an example. 
 
 ### 1. Compute rolling EWS per tile
 
@@ -198,21 +198,25 @@ EWS + merge:
 - 01a-combine_ews_output.py (merge tiles)
 - 01b-plot_deltas.py (delta maps)
 - 01c-sensitivity.py (sensitivity + κ agreement)
+
 Trend metrics:
 - 02-run_kt.py + 02a-plot_kt.py (Kendall τ + maps)
 - 02b-plot_biomes.py (biome summaries)
 - 04-run_theil_sen.py + 04a-plot_theil_sen.py (Theil–Sen)
 - 04b-run_mean_change.py + 04c-plot_mean_change.py (mean change)
 - 04d-agreement.py (agreement; dev)
+
 Abrupt shifts:
 - 03-run_changepoints.py (rpy2 + R)
 - 03a-plot_changepoints.py (maps)
 - 03b-plot_example_abrupt_shift.py (example time series)
 - 03c-plot_cumulative_abrupt_shift.py (cumulative area)
+
 Evaluation:
 - 05-mask_breakpoints.py (mask positives + pseudo-break negatives)
 - 05a-plot_true_positives.py (main evaluation plots)
 - 05a-plot_true_positives_aridity_pre.py (aridity stratification)
+
 ML:
 - 06a-preprocess_rf_drivers.py (drivers)
 - 06b-run_random_forest.py (XGBoost classifier)
