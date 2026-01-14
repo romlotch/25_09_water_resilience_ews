@@ -281,9 +281,9 @@ EWS + merge:
 - 01c-sensitivity.py (sensitivity + κ agreement)
 
 Trend metrics:
-- 02-run_kt.py + 02a-plot_kt.py (Kendall τ + maps)
-- 02b-plot_biomes.py (biome summaries)
-- 04-run_theil_sen.py + 04a-plot_theil_sen.py (Theil–Sen)
+- 02-run_kt.py + 02a-plot_kt.py (Kendall tau + maps)
+- 02b-plot_biomes.py (biome-level bar plot summaries)
+- 04-run_theil_sen.py + 04a-plot_theil_sen.py (Theil–Sen slope)
 - 04b-run_mean_change.py + 04c-plot_mean_change.py (mean change)
 - 04d-agreement.py (agreement; dev)
 
