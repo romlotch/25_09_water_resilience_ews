@@ -228,9 +228,23 @@ def compute_aridity_classes_like(ds_target, cfg):
     return labels
 
 
-def masked_zarr_path(tau_full_path, var, cp_test):
-    p = Path(tau_full_path)
-    return str(p.parent / f"{var}_cp_masked_{cp_test.lower()}.zarr")
+def masked_zarr_path(tau_full_path, var, cp_test, masked_dir=None):
+    """
+    Return path to the cp-masked dataset.
+
+    Priority:
+      1) masked_dir (e.g., outputs_root/zarr)
+      2) alongside tau_full_path (original behaviour)
+    """
+    name = f"{var}_cp_masked_{cp_test.lower()}.zarr"
+
+    if masked_dir is not None:
+        p1 = Path(masked_dir) / name
+        if p1.exists():
+            return str(p1)
+
+    p2 = Path(tau_full_path).parent / name
+    return str(p2)
 
 def ews_base_path_from_tau_full(tau_full_path):
     p = Path(tau_full_path)
@@ -280,7 +294,7 @@ def align_to_train(hf_any, train_types, train_cols):
     return hf_any
 
 
-def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_prefix, cp_key, alpha=0.05, tau_pre_neg_path=None, mask_grib_path=None):
+def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_prefix, cp_key, alpha=0.05, tau_pre_neg_path=None, mask_grib_path=None, masked_dir=None):
     cp_key = cp_key.lower()
     if cp_key not in CP_PVAL_MAP:
         raise ValueError(f"--cp-test must be one of {list(CP_PVAL_MAP.keys())}")
@@ -292,7 +306,7 @@ def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_pre
     if tau_pre_neg_path is not None and os.path.exists(tau_pre_neg_path):
         ds_tau_pre_neg = _standardize_ll(xr.open_dataset(tau_pre_neg_path)).interp(lat=ds_tau_full["lat"], lon=ds_tau_full["lon"])
 
-    masked_path = masked_zarr_path(tau_full_path, var_prefix, cp_key)
+    masked_path = masked_zarr_path(tau_full_path, var_prefix, cp_key, masked_dir=masked_dir)
     ds_masked = _standardize_ll(open_any_dataset(masked_path)).interp(lat=ds_tau_full["lat"], lon=ds_tau_full["lon"])
 
     mask_pos    = ds_masked[var_prefix].notnull().any(dim="time")
@@ -605,10 +619,18 @@ def main():
     # CLI args (unchanged)
     # ------------------------------ #
     parser = argparse.ArgumentParser(description="EWS + Env ML classifier")
-    parser.add_argument("--tau_full", type=str, help="Zarr path to full tau dataset (KT).")
-    parser.add_argument("--tau_pre", type=str, help="Zarr path to pre-break tau dataset for POSITIVES (KT).")
-    parser.add_argument("--tau_pre_neg", type=str, help="Zarr path to pre-break tau dataset for NEGATIVES (KT).")
-    parser.add_argument("--breaks", type=str, help="Zarr path to changepoint dataset (choose fields via --cp-test).")
+    parser.add_argument("--suffix", default=None,
+                    help="Optional suffix for inferred datasets (e.g. breakpoint_stc). "
+                         "Applies to tau_full and breaks inference only.")
+    parser.add_argument("--tau_full", type=str, default=None,
+                        help="Optional override: full tau dataset (KT) zarr. If omitted, inferred from config + --var + --suffix.")
+    parser.add_argument("--tau_pre", type=str, default=None,
+                        help="Optional override: pre-break tau dataset for POSITIVES (KT). If omitted, inferred as out_<var>_breakpoint_<cp_test>_kt.zarr.")
+    parser.add_argument("--tau_pre_neg", type=str, default=None,
+                        help="Optional override: pre-break tau dataset for NEGATIVES (KT). If omitted, inferred as out_<var>_breakpoint_<cp_test>_neg_kt.zarr.")
+    parser.add_argument("--breaks", type=str, default=None,
+                        help="Optional override: changepoint dataset zarr. If omitted, inferred from config + --var + --suffix as out_<var><suffix>_chp.zarr.")
+
     parser.add_argument("--var", type=str, choices=["sm","Et","precip"], help="Variable prefix for tau columns and preset predictors.")
     parser.add_argument("--cp_test", type=str, choices=["pettitt","stc","var"], help="Which breakpoint fields to use: pettitt, stc, var (should match the path to the breaks ds).")
     parser.add_argument("--outdir", type=str, help="Base output directory. A subfolder per variable/test will be created.")
@@ -618,14 +640,57 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
     args = parser.parse_args()
 
+    def _sfx(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        return s if s.startswith("_") else f"_{s}"
+
     cfg = load_config(args.config)
     repo_root = Path(cfg_get(cfg, "project.repo_root") or Path(__file__).resolve().parent).resolve()
     mask_grib_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
 
-    cp_key = args.cp_test.lower()
-    base_out = Path(args.outdir) if args.outdir else cfg_path(cfg, "paths.ml_results", mkdir=True)
+    outputs_root = Path(cfg_path(cfg, "paths.outputs_root", must_exist=True))
+    zarr_dir = outputs_root / "zarr"
+    zarr_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.outdir:
+        base_out = Path(args.outdir)
+    else:
+        # Prefer config if present; otherwise default under outputs_root
+        base_out = Path(cfg_get(cfg, "paths.ml_results") or (outputs_root / "figures" / "xgboost_results"))
+
     outdir = base_out / f"{args.var}_{cp_key}_SCIPY"
     outdir.mkdir(parents=True, exist_ok=True)
+
+    cp_key = args.cp_test.lower()
+
+    # ---- Infer core input paths if not provided ----
+    # Full tau (KT): out_<var><_suffix>_kt.zarr
+    tau_full_path = Path(args.tau_full) if args.tau_full else (zarr_dir / f"out_{args.var}{_sfx(args.suffix)}_kt.zarr")
+
+    # Breaks (changepoints): out_<var><_suffix>_chp.zarr
+    breaks_path = Path(args.breaks) if args.breaks else (zarr_dir / f"out_{args.var}{_sfx(args.suffix)}_chp.zarr")
+
+    # Pre-break KT (positives/negatives): out_<var>_breakpoint_<cp_test>_kt.zarr
+    tau_pre_path = Path(args.tau_pre) if args.tau_pre else (zarr_dir / f"out_{args.var}_breakpoint_{cp_key}_kt.zarr")
+    tau_pre_neg_path = Path(args.tau_pre_neg) if args.tau_pre_neg else (zarr_dir / f"out_{args.var}_breakpoint_{cp_key}_neg_kt.zarr")
+
+    missing = [p for p in [tau_full_path, breaks_path, tau_pre_path, tau_pre_neg_path] if not p.exists()]
+    if missing:
+        msg = "\n".join([f"  - {str(p)}" for p in missing])
+        raise FileNotFoundError(
+            "Missing one or more inferred inputs. Either create them or pass explicit paths:\n" + msg
+        )
+
+    # Also check the required masked dataset 
+    masked_path = Path(masked_zarr_path(str(tau_full_path), args.var, cp_key, masked_dir=str(zarr_dir)))
+    if not masked_path.exists():
+        raise FileNotFoundError(
+            f"Missing required masked dataset:\n  - {masked_path}\n"
+            "This script expects it to exist (used to define positive/negative domains). "
+            "If it lives elsewhere, you currently need to pass tau_full from the same folder as the masked file."
+        )
 
     # ------------------------------ #
     # Predictors 
@@ -654,10 +719,11 @@ def main():
     # Build target + predictors
     # ------------------------------ #
     df_all, ds_tau = build_target_dataframe(
-        args.tau_full, args.tau_pre, args.breaks, args.var, cp_key,
+        str(tau_full_path), str(tau_pre_path), str(breaks_path), args.var, cp_key,
         alpha=args.alpha,
-        tau_pre_neg_path=args.tau_pre_neg,
+        tau_pre_neg_path=str(tau_pre_neg_path),
         mask_grib_path=str(mask_grib_path),
+        masked_dir=str(zarr_dir),
     )
 
     predictors = []
