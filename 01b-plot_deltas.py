@@ -1,52 +1,23 @@
-import re 
+
 import os
-import glob
-import scipy
-import pickle
 import argparse
-import rasterio 
-import rioxarray
-import regionmask
 import numpy as np
 import xarray as xr
 import pandas as pd
 import seaborn as sn
-import geopandas as gpd
-from datetime import datetime
-from itertools import product
 
-import statsmodels.api as sm
+import warnings 
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+from pathlib import Path
+from utils.config import load_config, cfg_path, cfg_get
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import cartopy.io.shapereader as shpreader
 
 
-import colorsys
-from skimage.color import rgb2lab, lab2rgb
-
-from matplotlib.colors import to_rgb, to_hex
-from matplotlib.gridspec import GridSpec
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.colors as mpl_colors
-import matplotlib.patches as mpatches
-import matplotlib.colors as mcolors
-from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.ticker import FuncFormatter
-
-from statsmodels.tsa.seasonal import STL
-from statsmodels.tsa.seasonal import MSTL
-from statsmodels.tsa.stattools import acf 
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-
-from scipy import stats
-from scipy.stats import skew, kurtosis
-from scipy.interpolate import make_interp_spline
-from skimage.color import rgb2lab, lab2rgb
-
-import warnings 
 
 """ 
 Plots and saves deltas of the EWS. 
@@ -76,17 +47,15 @@ def plot_deltas(ds, var_name, out_path):
 
     # adjust as needed for plotting
 
-    """ #soil moisture
-    vmins = [-1.5, -0.075, -10, -35, -0.5]
-    vmaxs = [1.5, 0.075, 10, 35, 0.5] """
-
-    """ #transpration
-    vmins = [-1.5, -1, -10, -35, -1]
-    vmaxs = [1.5, 1, 10, 35, 1] """
-    
-    #precipitation 
-    vmins = [-1, -30, -10, -35, -0.5]
-    vmaxs = [1, 30, 10, 35, 0.5]
+    if var_name.lower() == "sm":
+        vmins = [-1.5, -0.075, -10, -35, -0.5]
+        vmaxs = [ 1.5,  0.075,  10,  35,  0.5]
+    elif var_name.lower() == "et":
+        vmins = [-1.5, -1, -10, -35, -1]
+        vmaxs = [ 1.5,  1,  10,  35,  1]
+    else:  # precip
+        vmins = [-1, -30, -10, -35, -0.5]
+        vmaxs = [ 1,  30,  10,  35,  0.5]
 
     cmap = sn.color_palette("RdBu_r", as_cmap=True)
 
@@ -123,7 +92,7 @@ def plot_deltas(ds, var_name, out_path):
         cbar.set_label(label)
 
         # Save individually
-        outfile = f"{outdir}{var_name}_deltas_{label.lower()}.png"
+        outfile = Path(outdir) / f"{var_name}_deltas_{label.lower()}.png"
         plt.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
@@ -144,7 +113,7 @@ def plot_deltas(ds, var_name, out_path):
         fig_cb.subplots_adjust(bottom=0.5, top=0.9, left=0.05, right=0.95)
 
         # Save as SVG (preferred for Inkscape) or PNG
-        colorbar_outfile = f"{outdir}colorbar_{var_name}_deltas_{label.lower()}.svg"
+        colorbar_outfile = Path(outdir) / f"colorbar_{var_name}_deltas_{label.lower()}.svg"
         plt.savefig(colorbar_outfile, format='svg', dpi=300, bbox_inches='tight', transparent=True)
         plt.close(fig_cb)
 
@@ -152,29 +121,43 @@ def plot_deltas(ds, var_name, out_path):
 
 def main(): 
 
-    warnings.filterwarnings('ignore')
+    warnings.filterwarnings("ignore")
 
     sn.set_style("white")
-    plt.rc("figure", figsize=(13, 9))
-    plt.rc("font", size=12)
-    plt.rcParams['font.family'] = 'DejaVu Sans'
-    mpl.rcParams['pdf.fonttype'] = 42 
-    mpl.rcParams['svg.fonttype'] = 'none'
-
-
+    mpl.rcParams["pdf.fonttype"] = 42
+    mpl.rcParams["svg.fonttype"] = "none"
+    plt.rcParams["font.family"] = "DejaVu Sans"
 
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset_path',   required=True)
-    p.add_argument('--variable',  required=True)
-    p.add_argument('--output_path',  required=True)
+    p.add_argument("--variable", required=True, help="sm | Et | precip")
+    p.add_argument("--suffix", default=None, help="Optional suffix used in filename (e.g. 'breakpoint_stc').")
+    p.add_argument("--dataset_path", default=None, help="Optional override input Zarr path.")
+    p.add_argument("--output_path", default=None, help="Optional override output directory.")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
     args = p.parse_args()
 
-    ds_path = args.dataset_path
+    cfg = load_config(args.config)
     var_name = args.variable
-    out_path = args.output_path
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", must_exist=True)
+
+    # Default input: outputs/zarr/out_<var><_suffix>.zarr
+    sfx = "" if not args.suffix else (args.suffix if args.suffix.startswith("_") else f"_{args.suffix}")
+    default_in = Path(outputs_root) / "zarr" / f"out_{var_name}{sfx}.zarr"
+    ds_path = Path(args.dataset_path) if args.dataset_path else default_in
+
+    # Default output: outputs/figures/deltas/<var>/
+    default_out = Path(outputs_root) / "figures" / "deltas" / var_name
+    out_dir = Path(args.output_path) if args.output_path else default_out
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[01b] Reading: {ds_path}")
+    ds = xr.open_dataset(ds_path)
+
 
     if var_name == "precip":
-        ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
+        mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+        ds_mask = xr.open_dataset(mask_path, engine="cfgrib")
 
         # Detect coordinate names
         lon_name = None
@@ -200,8 +183,8 @@ def main():
         mask = ds_mask["lsm"] > 0.7
         ds = ds.where(mask)
 
-    ds = xr.open_dataset(ds_path)
-    plot_deltas(ds, var_name, out_path)
+    
+    plot_deltas(ds, var_name, out_path=str(out_dir) + os.sep)
 
     print('Done!')
 

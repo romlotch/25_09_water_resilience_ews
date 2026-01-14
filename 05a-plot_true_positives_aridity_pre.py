@@ -8,6 +8,7 @@ import seaborn as sn
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from utils.config import load_config, cfg_path, cfg_get
 
 """
 Per-aridity stacked bar plots (TP/FP/FN/TN) for combined EWS indicators,
@@ -79,7 +80,7 @@ def get_area_da(lat_vals, lon_vals):
     grid = np.broadcast_to(row[:, None], (lat_vals.size, lon_vals.size))
     return xr.DataArray(grid, coords={"lat": lat_vals, "lon": lon_vals}, dims=("lat","lon"))
 
-def compute_aridity_classes_like(ds_target):
+def compute_aridity_classes_like(ds_target, cfg):
     """
     Compute time-mean aridity index (precip/PET) and bin to ARIDITY_LABELS on ds_target grid.
    
@@ -91,16 +92,16 @@ def compute_aridity_classes_like(ds_target):
         return ds
 
     # --- Precip (ERA5 monthly total precip 2000–2023) ---
-    precip = xr.open_dataset(
-        "/home/romi/ews/data/total_precipitation_monthly.nc"
-    ).sel(time=slice("2000-01-01", "2023-12-31"))
+    precip = xr.open_dataset(cfg_path(cfg, "resources.era5_precip_monthly_nc", must_exist=True)).sel(
+        time=slice("2000-01-01", "2023-12-31"))
     precip = precip.rename({"latitude": "lat", "longitude": "lon"})
     precip = precip.rio.write_crs("EPSG:4326")
     precip = wrap_to_180(precip, "lon")
     precip.rio.set_spatial_dims("lon", "lat", inplace=True)
 
     # Land-sea mask to drop ocean
-    ds_mask = xr.open_dataset("/home/romi/ews/data/landsea_mask.grib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    ds_mask = xr.open_dataset(mask_path, engine="cfgrib")
     ds_mask = ds_mask.rename({"latitude": "lat", "longitude": "lon"})
     ds_mask = ds_mask.rio.write_crs("EPSG:4326")
     ds_mask = wrap_to_180(ds_mask, "lon")
@@ -122,7 +123,7 @@ def compute_aridity_classes_like(ds_target):
     ))
 
     # --- PET (monthly) ---
-    pet = xr.open_dataset("/home/romi/ews/data/monthly_sum_epot_clean.zarr").sel(
+    pet = xr.open_dataset(cfg_path(cfg, "resources.pet_monthly_zarr", must_exist=True)).sel(
         time=slice("2000-01-01", "2023-11-30")
     )
     pet["time"] = ("time", pd.date_range(
@@ -350,16 +351,18 @@ def main():
     mpl.rcParams['pdf.fonttype'] = 42
     mpl.rcParams['svg.fonttype'] = 'none'
 
-    parser = argparse.ArgumentParser(
-        description="Per-aridity stacked bars for combined EWS using pre-break and pseudo-break τ datasets."
+    p = argparse.ArgumentParser(
+        description="Per-aridity stacked bars for combined EWS using pre-break and pseudo-break tau datasets."
     )
-    parser.add_argument('--cp_path',       type=str, required=True, help='Changepoint dataset.')
-    parser.add_argument('--pre_pos_path',  type=str, required=True, help='Pre-break τ dataset (positives).')
-    parser.add_argument('--pre_neg_path',  type=str, required=True, help='Pre-pseudo-break τ dataset (negatives).')
-    parser.add_argument('--var',           type=str, required=True, help='Variable prefix (e.g., sm, Et, precip).')
-    parser.add_argument('--out_dir',       type=str, required=True, help='Output directory.')
-    parser.add_argument('--alpha',         type=float, default=0.05, help='Significance threshold for τ.')
-    args = parser.parse_args()
+    p.add_argument('--cp_path',       type=str, required=True, help='Changepoint dataset.')
+    p.add_argument('--pre_pos_path',  type=str, required=True, help='Pre-break τ dataset (positives).')
+    p.add_argument('--pre_neg_path',  type=str, required=True, help='Pre-pseudo-break τ dataset (negatives).')
+    p.add_argument('--var',           type=str, required=True, help='Variable prefix (e.g., sm, Et, precip).')
+    p.add_argument('--out_dir',       type=str, required=True, help='Output directory.')
+    p.add_argument('--alpha',         type=float, default=0.05, help='Significance threshold for tau.')
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+    args = p.parse_args()
+    cfg = load_config(args.config)
 
     os.makedirs(args.out_dir, exist_ok=True)
 

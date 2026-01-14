@@ -8,6 +8,7 @@ import seaborn as sn
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import rioxarray  
+from utils.config import load_config, cfg_path, cfg_get
 
 """
 Grouped aridity stacked bars (Decrease/Neutral/Increase) per indicator.
@@ -35,15 +36,16 @@ Example:
 
 # --- CLI ---
 def parse_args():
-    ap = argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         description="Plot aridity-class summary bars for indicators or combined resilience signals."
     )
-    ap.add_argument("--dataset", required=True, help="Path to NetCDF/Zarr dataset (e.g., out_sm_kt.zarr)")
-    ap.add_argument("--var", required=True, help="Variable prefix (e.g., sm, Et, precip)")
-    ap.add_argument("--outdir", required=True, help="Output directory")
-    ap.add_argument("--mode", choices=["indicators", "combined"], default="indicators",
+    p.add_argument("--dataset", required=True, help="Path to NetCDF/Zarr dataset (e.g., out_sm_kt.zarr)")
+    p.add_argument("--var", required=True, help="Variable prefix (e.g., sm, Et, precip)")
+    p.add_argument("--outdir", required=True, help="Output directory")
+    p.add_argument("--mode", choices=["indicators", "combined"], default="indicators",
                     help="Plot raw indicators (5 panels) or composite signals (5 panels).")
-    return ap.parse_args()
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+    return p.parse_args()
 
 # --- Indicators ---
 INDICATORS = [
@@ -113,7 +115,7 @@ def tri_split_areas(kt, pval, area_da):
     neu_a = float(area_da.where(neu).sum().values)
     return dec_a, neu_a, inc_a, total
 
-def compute_aridity_classes_like(ds_target):
+def compute_aridity_classes_like(ds_target, cfg=None):
     """Compute time-mean aridity index (precip/PET), bin to classes, and
     return a DataArray of labels on the ds_target grid (lat, lon)."""
 
@@ -124,16 +126,16 @@ def compute_aridity_classes_like(ds_target):
         return ds
 
     # --- Precip (ERA5 monthly total precip 2000–2023) ---
-    precip = xr.open_dataset(
-        "/mnt/data/romi/data/ERA5_0.25_monthly/total_precipitation/total_precipitation_monthly.nc"
-    ).sel(time=slice("2000-01-01", "2023-12-31"))
+    precip = xr.open_dataset(cfg_path(cfg, "resources.era5_precip_monthly_nc", must_exist=True)).sel(
+        time=slice("2000-01-01", "2023-12-31"))
     precip = precip.rename({"latitude": "lat", "longitude": "lon"})
     precip = precip.rio.write_crs("EPSG:4326")
     precip = wrap_to_180(precip, "lon")
     precip.rio.set_spatial_dims("lon", "lat", inplace=True)
 
     # Land-sea mask to drop ocean
-    ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    ds_mask = xr.open_dataset(mask_path, engine="cfgrib")
     ds_mask = ds_mask.rename({"latitude": "lat", "longitude": "lon"})
     ds_mask = ds_mask.rio.write_crs("EPSG:4326")
     ds_mask = wrap_to_180(ds_mask, "lon")
@@ -155,7 +157,7 @@ def compute_aridity_classes_like(ds_target):
     ))
 
     # --- PET (monthly) ---
-    pet = xr.open_dataset("/mnt/data/romi/data/et_pot/monthly_sum_epot_clean.zarr").sel(
+    pet = xr.open_dataset(cfg_path(cfg, "resources.pet_monthly_zarr", must_exist=True)).sel(
         time=slice("2000-01-01", "2023-11-30")
     )
     pet["time"] = ("time", pd.date_range(
@@ -251,19 +253,22 @@ def combined_signal_masks(ds, prefix):
 # --- Main ---
 def main():
     args = parse_args()
+    cfg = load_config(args.config)
     os.makedirs(args.outdir, exist_ok=True)
 
     # tau output dataset 
     ds = xr.open_dataset(args.dataset)
 
     # Urban mask 
-    urban_mask = xr.open_dataset("/mnt/data/romi/data/urban_mask.zarr").rio.write_crs("EPSG:4326")
+    urban_mask = xr.open_dataset(cfg_path(cfg, "resources.urban_mask_zarr", must_exist=True))
     urban_mask = urban_mask.interp_like(ds, method="nearest")
     urban_mask = urban_mask["urban-coverfraction"].squeeze("time")
 
     # land-sea mask to keep only land for precipitation
     # If the ds already excludes ocean it still works 
-    lsm = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    lsm =xr.open_dataset(mask_path, engine="cfgrib")
+  
     lsm = lsm.rename({"latitude": "lat", "longitude": "lon"}).rio.write_crs("EPSG:4326")
     lsm = wrap_to_180(lsm, "lon")
     lsm = lsm.rio.set_spatial_dims("lon", "lat", inplace=True) or lsm

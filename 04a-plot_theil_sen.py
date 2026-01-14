@@ -11,6 +11,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from utils.config import load_config, cfg_path, cfg_get
+from pathlib import Path
 
 """
 Plots and saves Theil–Sen slope maps (per year) for AC1, SD, Skew, Kurt, FD.
@@ -35,33 +37,31 @@ E.g.:
 SUFFIXES = ["ac1", "std", "skew", "kurt", "fd"]
 LABELS   = ["AC1", "SD", "Skew.", "Kurt.", "FD"]
 
-def open_source_ds(path):
-    if os.path.isdir(path) and (
-        os.path.exists(os.path.join(path, ".zgroup")) or
-        os.path.exists(os.path.join(path, ".zmetadata"))
-    ):
-        return xr.open_zarr(path)
+
+def open_source_ds(path: str) -> xr.Dataset:
+    # Per your preference: zarr opens fine with open_dataset
     return xr.open_dataset(path)
 
-def robust_sym_limits(da, q = 0.995):
+
+def robust_sym_limits(da, q: float = 0.995):
     """Symmetric limits around 0 for plotting."""
     try:
         a = float(np.abs(da).quantile(q, skipna=True))
     except Exception:
-        # Fallback if quantile not available
         a = float(np.nanquantile(np.abs(da.values), q))
+
     if not np.isfinite(a) or a == 0.0:
-        a = float(np.nanmax(np.abs(da.values)))
+        a = float(np.nanmax(np.abs(da.values))) if np.isfinite(da.values).any() else 1.0
     if not np.isfinite(a) or a == 0.0:
         a = 1.0
     return -a, a
 
-def plot_theilsen(ds, var_name, out_dir,
-                  sig_only = False, auto_range = True, q= 0.995):
-    
+
+def plot_theilsen(ds, var_name: str, out_dir: str,
+                  sig_only: bool = False, auto_range: bool = True, q: float = 0.995):
+
     os.makedirs(out_dir, exist_ok=True)
 
-    # Build list of slope variables to plot
     to_plot = []
     for suf, lab in zip(SUFFIXES, LABELS):
         vname = f"{var_name}_{suf}_ts"
@@ -73,7 +73,6 @@ def plot_theilsen(ds, var_name, out_dir,
     if not to_plot:
         raise RuntimeError("No Theil–Sen slope variables found for given prefix.")
 
-    # PLot only significant slopes (CI excludes 0) if true
     if sig_only:
         for i, (da, lab, suf) in enumerate(to_plot):
             sig_name = f"{var_name}_{suf}_ts_sig"
@@ -82,28 +81,16 @@ def plot_theilsen(ds, var_name, out_dir,
             else:
                 print(f"[warn] Missing significance var {sig_name}; cannot mask {lab}.")
 
-    # Cmap
     cmap = sn.color_palette("RdBu_r", as_cmap=True)
 
-    # Manual ranges
-    # # soil moisture 
-    # vmins = [-0.05, -0.01, -0.5, -2.0, -0.02]
-    # vmaxs = [ 0.05,  0.01,  0.5,  2.0,  0.02]
-    # # transpiration 
-    # vmins = [-0.05, -0.5, -0.5, -2.0, -0.05]
-    # vmaxs = [ 0.05,  0.5,  0.5,  2.0,  0.05]
-    # # precipitation 
-    # vmins = [-0.03, -1.0, -0.5, -2.0, -0.03]
-    # vmaxs = [ 0.03,  1.0,  0.5,  2.0,  0.03]
+    for da, label, suf in to_plot:
 
-    for idx, (da, label, suf) in enumerate(to_plot):
-        # Decide color limits
         if auto_range:
             vmin, vmax = robust_sym_limits(da, q=q)
         else:
+            # keep behaviour simple; you can swap to fixed vmin/vmax later if needed
             vmin, vmax = robust_sym_limits(da, q=q)
 
-        # Figure
         fig, ax = plt.subplots(figsize=(7, 4.5), subplot_kw={'projection': ccrs.Robinson()})
         ax.set_global()
         ax.add_feature(cfeature.LAND, facecolor='white', edgecolor='none', linewidth=0.5, zorder=0)
@@ -120,23 +107,22 @@ def plot_theilsen(ds, var_name, out_dir,
         )
 
         ax.gridlines(color='black', alpha=0.5, linestyle='--', linewidth=0.5)
-        ax.set_title("")  
+        ax.set_title("")
         ax.set_xlabel(""); ax.set_ylabel("")
         ax.xaxis.set_ticks([]); ax.yaxis.set_ticks([])
 
-        # Cbar
         cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
         cbar.set_label(f"{label} slope (per year)")
 
-        # Save
         base = f"{var_name}_ts_{label.lower()}"
         if sig_only:
             base += "_sig"
+
         outfile = os.path.join(out_dir, f"{base}.png")
-        plt.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+        fig.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        # Save a cbar
+        # Standalone colorbar (SVG)
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))
         norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
         cb1 = plt.colorbar(
@@ -149,10 +135,11 @@ def plot_theilsen(ds, var_name, out_dir,
         fig_cb.subplots_adjust(bottom=0.5, top=0.9, left=0.05, right=0.95)
 
         colorbar_outfile = os.path.join(out_dir, f"colorbar_{base}.svg")
-        plt.savefig(colorbar_outfile, format='svg', dpi=300, bbox_inches='tight', transparent=True)
+        fig_cb.savefig(colorbar_outfile, format='svg', dpi=300, bbox_inches='tight', transparent=True)
         plt.close(fig_cb)
 
         print(f"Saved: {outfile}")
+
 
 def main():
     warnings.filterwarnings('ignore')
@@ -165,24 +152,62 @@ def main():
     mpl.rcParams['svg.fonttype'] = 'none'
 
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset_path', required=True, help="Path to *_ts.zarr or NetCDF")
-    p.add_argument('--variable',     required=True, help="Variable prefix (e.g., sm, Et, precip)")
-    p.add_argument('--output_path',  required=True, help="Directory to save figures")
-    p.add_argument('--sig_only',     action='store_true', help="Mask non-significant slopes")
-    p.add_argument('--auto_range',   action='store_true', help="Auto symmetric color limits (robust)")
-    p.add_argument('--q',            type=float, default=0.995, help="Quantile for auto_range (default 0.995)")
-    args = p.parse_args()
+    p.add_argument("--var", default=None,
+                   help="Variable prefix (e.g., sm, Et, precip). Required only if --dataset_path is omitted.")
+    p.add_argument("--suffix", default=None,
+                   help="Optional suffix for inferred dataset (e.g., breakpoints_pettitt).")
+    p.add_argument("--dataset_path", default=None,
+                   help="Optional override path to *_ts.zarr (if omitted, inferred from config + --var + --suffix).")
+    p.add_argument("--outdir", default=None,
+                   help="Optional override output directory (if omitted, uses outputs_root/figures/theil_sen/<var>/).")
 
-    ds = open_source_ds(args.dataset_path)
-    out_dir = args.output_path.rstrip("/")
+    p.add_argument("--sig_only", action="store_true", help="Mask non-significant slopes")
+    p.add_argument("--auto_range", action=argparse.BooleanOptionalAction, default=True,
+                   help="Auto symmetric color limits (robust). Default: True. Use --no-auto_range to disable.")
+    p.add_argument("--q", type=float, default=0.995, help="Quantile for auto_range (default 0.995)")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+
+    args = p.parse_args()
+    cfg = load_config(args.config)
+
+    outputs_root = Path(cfg_path(cfg, "paths.outputs_root", must_exist=True))
+
+    def _sfx(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        return s if s.startswith("_") else f"_{s}"
+
+    if args.dataset_path:
+        ds_path = Path(args.dataset_path)
+    else:
+        if not args.var:
+            raise SystemExit("If --dataset_path is omitted, you must provide --var (e.g., sm, Et, precip).")
+        ds_path = outputs_root / "zarr" / f"out_{args.var}{_sfx(args.suffix)}_ts.zarr"
+
+    if not ds_path.exists():
+        raise SystemExit(f"Dataset not found: {ds_path}")
+
+    if args.outdir:
+        out_dir = Path(args.outdir)
+    else:
+        if not args.var:
+            raise SystemExit("If --outdir is omitted, you must provide --var so we can infer an output folder.")
+        out_dir = outputs_root / "figures" / "theil_sen" / args.var
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ds = open_source_ds(str(ds_path))
 
     plot_theilsen(
-        ds, args.variable, out_dir,
+        ds, args.var if args.var else args.var, str(out_dir),
         sig_only=args.sig_only,
-        auto_range=args.auto_range or True,  # default on
+        auto_range=args.auto_range,
         q=args.q
     )
+
     print("Done!")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

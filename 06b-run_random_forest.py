@@ -37,6 +37,8 @@ from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 import shap
 
+from utils.config import load_config, cfg_path, cfg_get
+
 """
 Predict occurance of abrupt shifts in variable time series with 
 kendall tau of EWS and environmental variables. Input target tau, pre-breakpoint tau, 
@@ -130,7 +132,14 @@ def detect_lon_lat_names(ds):
     return lon, lat
 
 
-def compute_aridity_classes_like(ds_target):
+def open_any_dataset(path: str | Path) -> xr.Dataset:
+    p = Path(path)
+    if p.suffix == ".zarr" or p.is_dir():
+        return xr.open_dataset(str(p), engine="zarr")
+    return xr.open_dataset(str(p))
+
+
+def compute_aridity_classes_like(ds_target, cfg):
     """
     Compute time-mean aridity index (precip/PET) and bin to ARIDITY_LABELS on ds_target grid.
     Uses ERA5 precip (mm/month) and a PET monthly dataset.
@@ -142,16 +151,16 @@ def compute_aridity_classes_like(ds_target):
         return ds
 
     # --- Precip (ERA5 monthly total precip 2000–2023) ---
-    precip = xr.open_dataset(
-        "/home/romi/ews/data/total_precipitation_monthly.nc"
-    ).sel(time=slice("2000-01-01", "2023-12-31"))
+    precip_nc = cfg_path(cfg, "resources.era5_precip_monthly_nc", must_exist=True)
+    precip = xr.open_dataset(precip_nc).sel(time=slice("2000-01-01", "2023-12-31"))
     precip = precip.rename({"latitude": "lat", "longitude": "lon"})
     precip = precip.rio.write_crs("EPSG:4326")
     precip = wrap_to_180(precip, "lon")
     precip.rio.set_spatial_dims("lon", "lat", inplace=True)
 
     # Land-sea mask to drop ocean
-    ds_mask = xr.open_dataset("/home/romi/ews/data/landsea_mask.grib")
+    mask_grib = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    ds_mask = xr.open_dataset(mask_grib, engine="cfgrib")
     ds_mask = ds_mask.rename({"latitude": "lat", "longitude": "lon"})
     ds_mask = ds_mask.rio.write_crs("EPSG:4326")
     ds_mask = wrap_to_180(ds_mask, "lon")
@@ -173,7 +182,8 @@ def compute_aridity_classes_like(ds_target):
     ))
 
     # --- PET (monthly) ---
-    pet = xr.open_dataset("/home/romi/ews/data/monthly_sum_epot_clean.zarr").sel(
+    pet_zarr = cfg_path(cfg, "resources.pet_monthly_zarr", must_exist=True)
+    pet = open_any_dataset(pet_zarr).sel(
         time=slice("2000-01-01", "2023-11-30")
     )
     pet["time"] = ("time", pd.date_range(
@@ -270,7 +280,7 @@ def align_to_train(hf_any, train_types, train_cols):
     return hf_any
 
 
-def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_prefix, cp_key, alpha=0.05, tau_pre_neg_path=None):
+def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_prefix, cp_key, alpha=0.05, tau_pre_neg_path=None, mask_grib_path=None):
     cp_key = cp_key.lower()
     if cp_key not in CP_PVAL_MAP:
         raise ValueError(f"--cp-test must be one of {list(CP_PVAL_MAP.keys())}")
@@ -283,14 +293,17 @@ def build_target_dataframe(tau_full_path, tau_pre_pos_path, breaks_path, var_pre
         ds_tau_pre_neg = _standardize_ll(xr.open_dataset(tau_pre_neg_path)).interp(lat=ds_tau_full["lat"], lon=ds_tau_full["lon"])
 
     masked_path = masked_zarr_path(tau_full_path, var_prefix, cp_key)
-    ds_masked   = _standardize_ll(xr.open_dataset(masked_path)).interp(lat=ds_tau_full["lat"], lon=ds_tau_full["lon"])
+    ds_masked = _standardize_ll(open_any_dataset(masked_path)).interp(lat=ds_tau_full["lat"], lon=ds_tau_full["lon"])
+
     mask_pos    = ds_masked[var_prefix].notnull().any(dim="time")
 
     base_path = ews_base_path_from_tau_full(tau_full_path)
-    ds_base   = xr.open_dataset(base_path)
+    ds_base   = open_any_dataset(base_path)
     have_raw  = ds_base[f"{var_prefix}"].notnull().any(dim="time")
 
-    ds_lm = xr.open_dataset("/home/romi/ews/data/landsea_mask.grib", engine="cfgrib")
+    if mask_grib_path is None:
+        raise ValueError("mask_grib_path is required (set resources.landsea_mask_grib in config.yaml).")
+    ds_lm = xr.open_dataset(mask_grib_path, engine="cfgrib")
     ds_lm = ensure_lat_lon(ds_lm)
     ds_lm = ds_lm.rio.write_crs('EPSG:4326')
     ds_lm = ds_lm.assign_coords(lon=(((ds_lm.lon + 180) % 360) - 180)).sortby('lon')
@@ -602,66 +615,28 @@ def main():
     parser.add_argument("--pos-n", type=int, default=2000, help="Positive class sample size.")
     parser.add_argument("--neg-n", type=int, default=2000, help="Negative class sample size.")
     parser.add_argument("--alpha", type=float, default=0.05, help="P-value threshold for tau significance.")
+    parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
     args = parser.parse_args()
 
+    cfg = load_config(args.config)
+    repo_root = Path(cfg_get(cfg, "project.repo_root") or Path(__file__).resolve().parent).resolve()
+    mask_grib_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+
     cp_key = args.cp_test.lower()
-    outdir = Path(args.outdir) / f"{args.var}_{cp_key}_SCIPY"
+    base_out = Path(args.outdir) if args.outdir else cfg_path(cfg, "paths.ml_results", mkdir=True)
+    outdir = base_out / f"{args.var}_{cp_key}_SCIPY"
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------ #
     # Predictors 
     # ------------------------------ #
-    predictors_map = {
-        "sm": [
-            "/home/romi/ews/data/driver_analysis_final/driver_temperature.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_precipitation.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_soil_moisture.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_transpiration.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_pet.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_aridity.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_groundwater_table.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_GPP.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_tree_cover.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_non_tree_cover.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_enso.zarr",
-            # "/home/romi/ews/data/driver_analysis/global_irrigated_areas.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_crop_cover.zarr",
-        ],
-        "Et": [
-            "/home/romi/ews/data/driver_analysis_final/driver_temperature.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_precipitation.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_soil_moisture.zarr",
-            "/home/romi/ews/data//driver_analysis_final/driver_transpiration.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_pet.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_aridity.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_albedo.zarr",
-            "/mnt/data/romi/data/driver_analysis_final/driver_boundary_layer_height.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_GPP.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_tree_cover.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_non_tree_cover.zarr",
-            # "/home/romi/ews/data/driver_analysis/global_irrigated_areas.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_crop_cover.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_vpd.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_groundwater_table.zarr",
-        ],
-        "precip": [
-            "/home/romi/ews/data/driver_analysis_final/driver_temperature.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_precipitation.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_soil_moisture.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_transpiration.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_pet.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_transpiration.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_cape.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_boundary_layer_height.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_albedo.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_GPP.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_tree_cover.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_non_tree_cover.zarr",
-            # "/home/romi/ews/data/driver_analysis/global_irrigated_areas.zarr",
-            "/home/romi/ews/data/driver_analysis/driver_crop_cover.zarr",
-            "/home/romi/ews/data/driver_analysis_final/driver_enso.zarr",
-        ],
-    }
+    predictors_map = cfg_get(cfg, "ml.predictors")
+    if predictors_map is None or args.var not in predictors_map:
+        raise KeyError(
+            f"Missing ml.predictors.{args.var} in config. "
+            f"Add it to config.yaml (see template I provided)."
+        )
+    predictor_paths = predictors_map[args.var]
 
     vars_to_drop = [
         "step", "degree", "spatial_ref", "number", "surface",
@@ -680,12 +655,14 @@ def main():
     # ------------------------------ #
     df_all, ds_tau = build_target_dataframe(
         args.tau_full, args.tau_pre, args.breaks, args.var, cp_key,
-        alpha=args.alpha, tau_pre_neg_path=args.tau_pre_neg
+        alpha=args.alpha,
+        tau_pre_neg_path=args.tau_pre_neg,
+        mask_grib_path=str(mask_grib_path),
     )
 
     predictors = []
     tgt_lat = ds_tau["lat"]; tgt_lon = ds_tau["lon"]
-    for path in predictors_map[args.var]:
+    for path in predictor_paths:
         if not os.path.exists(path):
             print(f"Predictor missing, skipping: {path}")
             continue
@@ -724,7 +701,7 @@ def main():
     print("Example KT stats:", df_all[ews_cols_all].describe(percentiles=[.01,.5,.99]).T.head(10))
 
     # ------------------------------ #
-    # Final numeric coercion - had to add this cause the _kt valyes were crazy
+    # Final numeric coercion - added this coercion block cause the _kt valyes were very strange
     # ------------------------------ #
     df_model = df_all.copy()
     ews_cols = [c for c in df_model.columns if c.endswith("_kt")]
@@ -1040,7 +1017,7 @@ def main():
     # SHAP by biome 
     # ------------------------------ #
     if RUN_BIOME_SHAP:
-        biomes_fp = "/home/romi/ews/data/terr-ecoregions-TNC/tnc_terr_ecoregions.shp"
+        biomes_fp = str(cfg_path(cfg, "resources.tnc_biomes_shapefile", must_exist=True))
 
         biomes_name_map = {
             'Boreal Forests/Taiga': 'Boreal Forests/Taiga',
@@ -1179,7 +1156,7 @@ def main():
     if RUN_ARIDITY_SHAP:
         BIOME_TOP_FEATS = 10 # just 10 for aridity so it can be a square
         
-        arid_da = compute_aridity_classes_like(ds_tau) 
+        arid_da = compute_aridity_classes_like(ds_tau, cfg) 
         arid_df = arid_da.to_dataframe(name="aridity_class").reset_index()
 
         df_ar = df_model.merge(arid_df, on=["lat", "lon"], how="left")

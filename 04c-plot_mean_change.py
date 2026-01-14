@@ -1,10 +1,7 @@
-import re 
+
 import os
-import glob
-import scipy
-import pickle
 import argparse
-import rasterio 
+import rasterio
 import rioxarray
 import regionmask
 import numpy as np
@@ -21,7 +18,6 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import cartopy.io.shapereader as shpreader
 
-import colorsys
 from skimage.color import rgb2lab, lab2rgb
 
 from matplotlib.colors import to_rgb, to_hex
@@ -35,17 +31,12 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.ticker import FuncFormatter
 
-from statsmodels.tsa.seasonal import STL
-from statsmodels.tsa.seasonal import MSTL
-from statsmodels.tsa.stattools import acf 
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
-from scipy import stats
-from scipy.stats import skew, kurtosis
-from scipy.interpolate import make_interp_spline
-from skimage.color import rgb2lab, lab2rgb
+from pathlib import Path
+from utils.config import load_config, cfg_path, cfg_get
 
-import warnings 
+import warnings
+
 
 """ 
 Plots and saves mean change of the EWS. 
@@ -80,9 +71,7 @@ VMAP = {
     },
 }
 
-
 def _get_meanchange_field(ds, base, stat):
-    
     candidates = [
         f"{base}_{stat}_mean_change",
         f"{base}_{stat}_meanchange",
@@ -92,31 +81,67 @@ def _get_meanchange_field(ds, base, stat):
     for name in candidates:
         if name in ds:
             return ds[name]
+    return None
 
-def plot_meanchange(ds, var_name, out_path): 
+
+def _mask_precip_to_land(ds: xr.Dataset, cfg) -> xr.Dataset:
+    """Mask precip dataset to land (lsm > 0.7) on ds lon/lat grid."""
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    mask_ds = xr.open_dataset(mask_path, engine="cfgrib")
+
+    mask_ds = mask_ds.rio.write_crs("EPSG:4326")
+    mask_ds = mask_ds.assign_coords(
+        longitude=(((mask_ds.longitude + 180) % 360) - 180)
+    ).sortby("longitude")
+    mask_ds.rio.set_spatial_dims("longitude", "latitude", inplace=True)
+
+    ds_mask = mask_ds.interp(
+        longitude=ds["lon"],
+        latitude=ds["lat"],
+        method="nearest",
+    )
+
+    land = (ds_mask["lsm"] > 0.7)
+
+    # Rename dims/coords to match ds
+    if "longitude" in land.dims:
+        if "lon" in land.coords:
+            land = land.swap_dims({"longitude": "lon"}).drop_vars("longitude")
+        else:
+            land = land.rename({"longitude": "lon"})
+    if "latitude" in land.dims:
+        if "lat" in land.coords:
+            land = land.swap_dims({"latitude": "lat"}).drop_vars("latitude")
+        else:
+            land = land.rename({"latitude": "lat"})
+
+    land = land.reindex_like(ds, method=None)
+    return ds.where(land)
+
+
+def plot_meanchange(ds, var_name, out_path):
     # Output dir
     outdir = out_path if out_path.endswith(os.sep) else out_path + os.sep
     os.makedirs(outdir, exist_ok=True)
 
-    # Colormap
     cmap = sn.color_palette("RdBu_r", as_cmap=True)
 
-    if var_name not in VMAP:
-        rng = VMAP["precip"]
-    else:
-        rng = VMAP[var_name]
-
+    rng = VMAP[var_name] if var_name in VMAP else VMAP["precip"]
     vmins = rng["vmin"]
     vmaxs = rng["vmax"]
 
     for i, stat in enumerate(INDICATOR_STATS):
         label = LABELS[stat]
-        var = _get_meanchange_field(ds, var_name, stat)  # e.g., sm_ac1_mean_change
+        var = _get_meanchange_field(ds, var_name, stat)
 
-        fig, ax = plt.subplots(figsize=(7, 4.5), subplot_kw={'projection': ccrs.Robinson()})
+        if var is None:
+            print(f"[warn] Missing mean-change field for {var_name} {stat}; skipping.")
+            continue
+
+        fig, ax = plt.subplots(figsize=(7, 4.5), subplot_kw={"projection": ccrs.Robinson()})
         ax.set_global()
-        ax.add_feature(cfeature.LAND, facecolor='white', edgecolor='none', linewidth=0.5, zorder=0)
-        ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.5, color='black')
+        ax.add_feature(cfeature.LAND, facecolor="white", edgecolor="none", linewidth=0.5, zorder=0)
+        ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.5, color="black")
         ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
 
         sc = var.plot(
@@ -126,10 +151,10 @@ def plot_meanchange(ds, var_name, out_path):
             vmax=vmaxs[i],
             cmap=cmap,
             add_colorbar=False,
-            rasterized=True
+            rasterized=True,
         )
 
-        ax.gridlines(color='black', alpha=0.5, linestyle='--', linewidth=0.5)
+        ax.gridlines(color="black", alpha=0.5, linestyle="--", linewidth=0.5)
         ax.set_title("")
         ax.set_xlabel("")
         ax.set_ylabel("")
@@ -138,69 +163,80 @@ def plot_meanchange(ds, var_name, out_path):
 
         # Save map
         outfile = f"{outdir}{var_name}_meanchange_{label.lower()}.png"
-        plt.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+        plt.savefig(outfile, format="png", dpi=300, bbox_inches="tight", facecolor="white")
+
+        # (Optional) also add a map colorbar if you ever want it later:
+        # cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
+        # cbar.set_label(label)
+
         plt.close(fig)
 
-        # Colorbar
-        cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
-        cbar.set_label(label)
-
-        # Save cbar
+        # Save separate colorbar SVG
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))
         norm = plt.Normalize(vmin=vmins[i], vmax=vmaxs[i])
-        cb1 = plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=ax_cb, orientation='horizontal')
+        cb1 = plt.colorbar(
+            plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+            cax=ax_cb,
+            orientation="horizontal",
+        )
         cb1.set_label(label)
         cb1.ax.tick_params(labelsize=8)
         fig_cb.subplots_adjust(bottom=0.5, top=0.9, left=0.05, right=0.95)
 
         colorbar_outfile = f"{outdir}colorbar_{var_name}_meanchange_{label.lower()}.svg"
-        plt.savefig(colorbar_outfile, format='svg', dpi=300, bbox_inches='tight', transparent=True)
+        plt.savefig(colorbar_outfile, format="svg", dpi=300, bbox_inches="tight", transparent=True)
         plt.close(fig_cb)
 
         print(f"Saved to: {outfile}")
 
-def main(): 
-    warnings.filterwarnings('ignore')
+
+def main():
+    warnings.filterwarnings("ignore")
 
     sn.set_style("white")
     plt.rc("figure", figsize=(13, 9))
     plt.rc("font", size=12)
-    plt.rcParams['font.family'] = 'DejaVu Sans'
-    mpl.rcParams['pdf.fonttype'] = 42 
-    mpl.rcParams['svg.fonttype'] = 'none'
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    mpl.rcParams["pdf.fonttype"] = 42
+    mpl.rcParams["svg.fonttype"] = "none"
 
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset_path', required=True)
-    p.add_argument('--variable',     required=True)
-    p.add_argument('--output_path',  required=True)
+    p.add_argument("--variable", required=True, help="sm, Et, precip")
+    p.add_argument("--suffix", default=None,
+                   help="Optional suffix for inferred dataset (e.g. breakpoint_stc).")
+    p.add_argument("--dataset_path", default=None,
+                   help="Optional override path to *_meanchange.zarr. If omitted, inferred from config + --variable + --suffix.")
+    p.add_argument("--output_path", default=None,
+                   help="Optional override output directory. If omitted, uses outputs_root/figures/meanchange/<variable>/")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
     args = p.parse_args()
+    cfg = load_config(args.config)
 
-    ds_path = args.dataset_path
-    var_name = args.variable
-    out_path = args.output_path
+    outputs_root = Path(cfg_path(cfg, "paths.outputs_root", must_exist=True))
 
-    ds = xr.open_zarr(ds_path)
+    def _sfx(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        return s if s.startswith("_") else f"_{s}"
 
-    if var_name == "precip":
-        mask_ds = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
+    default_ds = outputs_root / "zarr" / f"out_{args.variable}{_sfx(args.suffix)}_meanchange.zarr"
+    ds_path = Path(args.dataset_path) if args.dataset_path else default_ds
 
-        mask_ds = mask_ds.rio.write_crs("EPSG:4326")
-        mask_ds = mask_ds.assign_coords(longitude=(((mask_ds.longitude + 180) % 360) - 180)).sortby("longitude")
-        mask_ds.rio.set_spatial_dims("longitude", "latitude", inplace=True)
+    default_out = outputs_root / "figures" / "meanchange" / args.variable
+    out_path = str(Path(args.output_path)) if args.output_path else str(default_out)
 
-        #mask_on_ds = mask_ds.interp(
-        ds_mask = mask_ds.interp(
-        longitude=ds["lon"],  
-        latitude=ds["lat"],
-        method="nearest",
-        )
- 
-        # Apply mask: keep only where lsm > 0.7
-        mask = ds_mask["lsm"] > 0.7
-        ds = ds.where(mask)
+    if not ds_path.exists():
+        raise FileNotFoundError(f"Dataset not found: {ds_path}")
 
-    plot_meanchange(ds, var_name, out_path)
-    print('Done!')
+    ds = xr.open_dataset(str(ds_path))
 
-if __name__=='__main__':
+    if args.variable == "precip":
+        ds = _mask_precip_to_land(ds, cfg)
+
+    plot_meanchange(ds, args.variable, out_path)
+    print("Done!")
+
+
+if __name__ == "__main__":
     main()

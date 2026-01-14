@@ -10,6 +10,7 @@ import cartopy.crs as ccrs
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from utils.config import load_config, cfg_path, cfg_get
 
 
 """ 
@@ -159,12 +160,14 @@ def wrap_to_180(ds, lon_name="lon"):
     ds = ds.assign_coords({lon_name: (((ds[lon_name] + 180) % 360) - 180)}).sortby(lon_name)
     return ds
 
-def apply_land_mask_if_precip(ds_breaks, ds_ews, var_name, lon_name, lat_name):
+def apply_land_mask_if_precip(ds_breaks, ds_ews, var_name, lon_name, lat_name, cfg):
     """If var is 'precip', apply land-sea mask (lsm > 0.7) to BOTH! datasets so theyre consistent."""
     if var_name != "precip":
         return ds_breaks, ds_ews
 
-    ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    ds_mask = xr.open_dataset(mask_path, engine ="cfgrib")
+    
     if "longitude" in ds_mask.coords:
         ds_mask = ds_mask.assign_coords(longitude=(((ds_mask.longitude + 180) % 360) - 180)).sortby("longitude")
 
@@ -1121,15 +1124,18 @@ def main():
     mpl.rcParams['pdf.fonttype'] = 42
     mpl.rcParams['svg.fonttype'] = 'none'
 
-    parser = argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         description='Plot & map indicator/EWS performance with changepoints as ground truth.'
     )
-    parser.add_argument('--ews_kt_path', type=str, required=True, help='Path to the EWS Kendall tau dataset.')
-    parser.add_argument('--ds_cp_path', type=str, required=True, help='Path to the changepoint dataset.')
-    parser.add_argument('--var', type=str, required=True, help='Variable name (e.g., Et, precip, sm).')
-    parser.add_argument('--out_dir', type=str, required=True, help='Output directory for figures.')
+    p.add_argument('--ews_kt_path', type=str, required=True, help='Path to the EWS Kendall tau dataset.')
+    p.add_argument('--ds_cp_path', type=str, required=True, help='Path to the changepoint dataset.')
+    p.add_argument('--var', type=str, required=True, help='Variable name (e.g., Et, precip, sm).')
+    p.add_argument('--out_dir', type=str, required=True, help='Output directory for figures.')
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
 
-    args = parser.parse_args()
+    args = p.parse_args()
+    cfg = load_config(args.config)
+
     ews_kt_path = args.ews_kt_path
     ds_cp_path  = args.ds_cp_path
     var_name    = args.var

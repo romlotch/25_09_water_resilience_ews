@@ -10,7 +10,9 @@ import xarray as xr
 from statsmodels.tsa.seasonal import STL
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
+from utils.config import load_config, cfg_path, cfg_get
 import gc
+import rioxarray
 
 # Patch psutil bug 
 import builtins, psutil._common
@@ -102,7 +104,7 @@ def _write_tile_from_path(dataset_path, variable, tile_path, lat_slice, lon_slic
     ds.close()
 
 
-def create_tiles(dataset_path, variable, out_dir, tile_size: int = 50, workers: int = 4, freq: str = "D"):
+def create_tiles(dataset_path, variable, out_dir, cfg, tile_size: int = 50, workers: int = 4, freq: str = "D"):
     """
     Parallel tile creation: slice dataset into spatial tiles and write each tile Zarr.
     """
@@ -112,7 +114,8 @@ def create_tiles(dataset_path, variable, out_dir, tile_size: int = 50, workers: 
     # land mask precip so it doesn't take forever
     if variable == 'precip': 
 
-        mask_ds = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
+        mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+        mask_ds = xr.open_dataset(mask_path, engine="cfgrib")
 
         mask_ds = mask_ds.rio.write_crs("EPSG:4326")
         mask_ds = mask_ds.assign_coords(longitude=(((mask_ds.longitude + 180) % 360) - 180)).sortby("longitude")
@@ -120,7 +123,7 @@ def create_tiles(dataset_path, variable, out_dir, tile_size: int = 50, workers: 
 
         # Interpolate to ds grid 
         mask_on_ds = mask_ds.interp(
-            longitude=ds["lon"],  
+            longitude=ds["lon"],   # adjust if its longitude 
             latitude=ds["lat"],
             method="nearest",
         )
@@ -364,29 +367,38 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--dataset',   required=True)
     p.add_argument('--variable',  required=True)
-    p.add_argument('--freq')
+    p.add_argument('--freq', default = "D")
     p.add_argument('--window_years', type=int, default=5)
     p.add_argument('--out',         default=None)
     p.add_argument('--workers',     type=int, default=None)
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
     args = p.parse_args()
+    cfg = load_config(args.config)
 
     workers = args.workers or os.cpu_count() or 1
-    suffix  = args.out or args.variable
-    tiles   = f"tiles_{suffix}"
-    processed = f"processed_tiles_{suffix}"
 
-    print(f'Tiles dir: {tiles}')
-    print(f'Processed dir: {processed}')
+    suffix = args.out or args.variable
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", mkdir=True)
+    tiles = outputs_root / "tiles" / suffix
+    processed = outputs_root / "processed_tiles" / suffix
+
+    tiles = str(tiles)
+    processed = str(processed)
+
+    print(f"Tiles dir: {tiles}")
+    print(f"Processed dir: {processed}")
+
 
     print(f"[MAIN] Tiling with {workers} workers")
     create_tiles(args.dataset, args.variable, tiles,
-                 tile_size=50, workers=workers, freq=args.freq)
+             cfg=cfg, tile_size=50, workers=workers, freq=args.freq)
 
     print(f"[MAIN] Processing with {workers} workers")
     os.makedirs(processed, exist_ok=True)
 
     tile_list = sorted(glob.glob(os.path.join(tiles,"tile_*.zarr")))
-    freq_str = args.freq or "D"
+    freq_str = args.freq
     window = (52 if isinstance(freq_str, str) and freq_str.upper().startswith("W") else 365) * args.window_years
 
     fn = partial(process_tile,

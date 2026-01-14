@@ -1,23 +1,13 @@
 
-import re 
-import os
-import glob
-import scipy
-import pickle
 import argparse
-import rasterio 
-import rioxarray
-import regionmask
 
 import numpy as np
 import xarray as xr
 import pandas as pd
-import seaborn as sn
 from tqdm import tqdm
-import geopandas as gpd
+
 from pathlib import Path
-from datetime import datetime
-from itertools import product
+
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
 
@@ -28,16 +18,8 @@ import rpy2.robjects.packages as rpackages
 from rpy2.robjects.conversion import localconverter
 from rpy2.robjects import FloatVector
 
-import statsmodels.api as sm
 
-from statsmodels.tsa.seasonal import STL
-from statsmodels.tsa.seasonal import MSTL
-from statsmodels.tsa.stattools import acf 
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-
-from scipy import stats
-from scipy.stats import skew, kurtosis
-from scipy.interpolate import make_interp_spline
+from utils.config import load_config, cfg_path, cfg_get
 
 import warnings 
 warnings.filterwarnings('ignore')
@@ -84,8 +66,9 @@ def prepare_rfunc():
     tibble = importr("tibble")
     changepoint = importr("changepoint")
 
+
+
     # -- Define R function ---
-    
 
     r_code = """
     function(x) {
@@ -192,7 +175,7 @@ def prepare_rfunc():
     return r_func
 
 
-def run_chp_joblib(fp, var, r_func): 
+def run_chp_joblib(dataset_path: Path, var: str, r_func, outdir: Path | None): 
 
     # --- Wrapper for R function ---
     def run_structural_tests(ts):
@@ -209,26 +192,28 @@ def run_chp_joblib(fp, var, r_func):
         
 
     print('--- Loading dataset ---')
-    ds = xr.open_dataset(f'{fp}')
-    Et = ds[f'{var}']
+    ds = xr.open_dataset(str(dataset_path))
+    da = ds[var]
 
-    print('--- Preparing for parallel execution ---')
-    lat_vals = Et['lat'].values
-    lon_vals = Et['lon'].values
+    print("--- Preparing for parallel ---")
+    lat_vals = da["lat"].values
+    lon_vals = da["lon"].values
     nlat, nlon = len(lat_vals), len(lon_vals)
 
-    Et_stacked = Et.stack(pixel=('lat', 'lon')).transpose('pixel', 'time')
-    time_series_list = [Et_stacked.isel(pixel=i).values for i in range(Et_stacked.sizes['pixel'])]
+    da_stacked = da.stack(pixel=("lat", "lon")).transpose("pixel", "time")
+    time_series_list = [da_stacked.isel(pixel=i).values for i in range(da_stacked.sizes["pixel"])]
 
-    print('--- Running ---')
+    print("--- Running ---")
     with tqdm_joblib(tqdm(desc="Processing pixels...", total=len(time_series_list))):
-        results = Parallel(n_jobs=-1, backend='loky')(
+        results = Parallel(n_jobs=-1, backend="loky")(
             delayed(run_structural_tests)(ts) for ts in time_series_list
         )
 
     for i, r in enumerate(results):
         if not isinstance(r, np.ndarray) or r.shape != (19,):
-            print(f"Result at index {i} is invalid: {r} of type {type(r)} and shape {getattr(r, 'shape', None)}")
+            print(
+                f"Result at index {i} is invalid: {r} of type {type(r)} and shape {getattr(r, 'shape', None)}"
+            )
 
     results_arr = np.array(results)
     print(results_arr.shape)
@@ -257,39 +242,82 @@ def run_chp_joblib(fp, var, r_func):
         ]
 
     result_ds = xr.Dataset(
-        {var: (("lat", "lon"), results_arr[:, :, i]) for i, var in enumerate(var_names)},
-        coords={"lat": lat_vals, "lon": lon_vals}
+        {name: (("lat", "lon"), results_arr[:, :, i]) for i, name in enumerate(var_names)},
+        coords={"lat": lat_vals, "lon": lon_vals},
     )
 
-    input_path = Path(fp)
-    output_path = input_path.with_name(input_path.stem + "_chp" + input_path.suffix)
+    # output path (default: next to input, original behaviour)
+    input_path = dataset_path
+    default_out = input_path.with_name(input_path.stem + "_chp" + input_path.suffix)
 
-    result_ds.to_zarr(output_path, mode='w')
+    if outdir is not None:
+        outdir.mkdir(parents=True, exist_ok=True)
+        output_path = outdir / default_out.name
+    else:
+        output_path = default_out
+
+    result_ds.to_zarr(str(output_path), mode="w")
     print(f"Saved changepoint dataset to: {output_path}")
 
     return 
 
 
-def main(fp, var):
+def parse_args():
+    p = argparse.ArgumentParser(description="Run changepoint detection on a dataset.")
+    p.add_argument("--var", required=True, help="Variable name to process (e.g., Et, precip, sm).")
+    p.add_argument(
+        "--suffix",
+        default=None,
+        help="Optional suffix for inferred dataset (e.g. breakpoint_stc).",
+    )
+    p.add_argument(
+        "--dataset",
+        default=None,
+        help="Optional override path to input dataset (.zarr or netcdf). If omitted, inferred from config + --var + --suffix.",
+    )
 
-    print('--- Preparing R environment ---')
+    p.add_argument(
+        "--fp",
+        default=None,
+        help="(Legacy) Optional override path to input dataset. Prefer --dataset.",
+    )
+    p.add_argument(
+        "--outdir",
+        default=None,
+        help="Optional output directory. If omitted, saves next to input dataset (original behaviour).",
+    )
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+    return p.parse_args()
+
+def _sfx(s: str | None) -> str:
+    if not s:
+        return ""
+    s = str(s).strip()
+    return s if s.startswith("_") else f"_{s}"
+
+
+def main():
+
+    args = parse_args()
+    cfg = load_config(args.config)
+
+    outputs_root = Path(cfg_path(cfg, "paths.outputs_root", must_exist=True))
+
+    # infer input if not provided
+    default_ds = outputs_root / "zarr" / f"out_{args.var}{_sfx(args.suffix)}.zarr"
+    ds_path = Path(args.dataset) if args.dataset else (Path(args.fp) if args.fp else default_ds)
+
+    outdir = Path(args.outdir) if args.outdir else None
+
+    print("--- Preparing R environment ---")
     r_func = prepare_rfunc()
 
-    run_chp_joblib(fp, var, r_func)
+    run_chp_joblib(ds_path, args.var, r_func, outdir)
 
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description='Run changepoint detection on a dataset.') 
-    parser.add_argument('--fp', type=str, required=True, help='Path to the EWS output.') 
-    parser.add_argument('--var', type=str, required=True, help='Variable name to process (e.g., Et, precip, sm).')
-    
-    args = parser.parse_args()
-
-    fp = args.fp
-    var = args.var
-
-    main(fp, var)
+    main()
         
 
     

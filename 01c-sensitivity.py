@@ -4,18 +4,20 @@ import argparse
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pathlib import Path
 from statsmodels.tsa.seasonal import STL
 from scipy.stats import kendalltau
 from sklearn.metrics import cohen_kappa_score
 import re
+from utils.config import load_config, cfg_path
 
 
 """
 Example:
-python3 01c-sensitivity_tau_lightsk.py \
-  --dataset /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr \
-  --variable Et \
-  --outdir /mnt/data/romi/output/paper_1/output_Et_final \
+python3 01c-sensitivity.py \
+  --dataset /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr \
+  --variable precip \
+  --outdir /mnt/data/romi/output/paper_1/output_precip_final \
   --i0 270 --i1 320 --j0 470 --j1 520 \
   --eps_tau 0.05 --p_alpha 0.05
 """
@@ -516,23 +518,43 @@ def run_sensitivity(dataset, variable, outdir,
 # CLI
 
 def main():
-    ap = argparse.ArgumentParser(description="Sensitivity via Kendall tau labels and Light's kappa including neutrals, plus summaries.")
-    ap.add_argument("--dataset",  required=True, help="Path to full dataset (zarr or netcdf)")
-    ap.add_argument("--variable", required=True, help="Variable name (e.g., sm, Et, precip)")
-    ap.add_argument("--outdir",   required=True, help="Output directory")
-    ap.add_argument("--i0", type=int, default=0, help="lat start index (inclusive)")
-    ap.add_argument("--i1", type=int, default=50, help="lat end index (exclusive)")
-    ap.add_argument("--j0", type=int, default=0, help="lon start index (inclusive)")
-    ap.add_argument("--j1", type=int, default=50, help="lon end index (exclusive)")
-    ap.add_argument("--eps_tau", type=float, default=0.05, help="neutral threshold for tau magnitude")
-    ap.add_argument("--p_alpha", type=float, default=0.05, help="p value threshold; p > alpha becomes neutral")
-    ap.add_argument("--report_top_pairs", type=int, default=3, help="how many best/worst pairs to record per indicator")
-    args = ap.parse_args()
+    p = argparse.ArgumentParser(description="Sensitivity via Kendall tau labels and Light's kappa including neutrals, plus summaries.")
 
-    run_sensitivity(args.dataset, args.variable, args.outdir,
-                    i0=args.i0, i1=args.i1, j0=args.j0, j1=args.j1,
-                    eps_tau=args.eps_tau, p_alpha=args.p_alpha,
-                    report_top_pairs=args.report_top_pairs)
+    p.add_argument("--variable", required=True, help="Variable name (e.g., sm, Et, precip)")
+    p.add_argument("--dataset", default=None,
+               help="Optional override: path to full dataset (zarr or netcdf). If omitted, inferred from config + --variable + --suffix.")
+    p.add_argument("--suffix", default=None,
+                help="Optional filename suffix (e.g. 'breakpoint_stc' -> out_<var>_breakpoint_stc.zarr) used when inferring --dataset.")
+    p.add_argument("--outdir", default=None,
+                help="Optional override output directory. If omitted, uses outputs/tables/sensitivity/<var>/ under outputs_root.")
+    p.add_argument("--i0", type=int, default=0, help="lat start index (inclusive)")
+    p.add_argument("--i1", type=int, default=50, help="lat end index (exclusive)")
+    p.add_argument("--j0", type=int, default=0, help="lon start index (inclusive)")
+    p.add_argument("--j1", type=int, default=50, help="lon end index (exclusive)")
+    p.add_argument("--eps_tau", type=float, default=0.05, help="neutral threshold for tau magnitude")
+    p.add_argument("--p_alpha", type=float, default=0.05, help="p value threshold; p > alpha becomes neutral")
+    p.add_argument("--report_top_pairs", type=int, default=3, help="how many best/worst pairs to record per indicator")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+
+    args = p.parse_args()
+    cfg = load_config(args.config)
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", must_exist=True)
+
+    # default dataset path: outputs/zarr/out_<var><_suffix>.zarr
+    sfx = "" if not args.suffix else (args.suffix if args.suffix.startswith("_") else f"_{args.suffix}")
+    default_ds = Path(outputs_root) / "zarr" / f"out_{args.variable}{sfx}.zarr"
+    dataset = args.dataset or str(default_ds)
+
+    # default outdir: outputs/tables/sensitivity/<var>/
+    default_outdir = Path(outputs_root) / "tables" / "sensitivity" / args.variable
+    outdir = args.outdir or str(default_outdir)
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+
+    run_sensitivity(dataset, args.variable, outdir,
+                i0=args.i0, i1=args.i1, j0=args.j0, j1=args.j1,
+                eps_tau=args.eps_tau, p_alpha=args.p_alpha,
+                report_top_pairs=args.report_top_pairs)
 
 if __name__ == "__main__":
     main()

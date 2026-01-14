@@ -3,6 +3,7 @@ import os
 import warnings
 from pathlib import Path
 from glob import glob
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ import xarray as xr
 import dask
 import rasterio 
 import rioxarray  
+
+from utils.config import load_config, cfg_path, cfg_get
 
 
 """
@@ -81,12 +84,8 @@ PATH_ALBEDO = ERA5_ROOT / "forecast_albedo"
 # Output directories
 OUT_DIR_FINAL = Path("/mnt/data/romi/data/driver_analysis_final")
 OUT_DIR = Path("/mnt/data/romi/data/driver_analysis")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-OUT_DIR_FINAL.mkdir(parents=True, exist_ok=True)
 
-# PET netcdf (daily)
-PET_DIR = Path("/mnt/data/romi/data/et_pot")
-PET_FILES = sorted(glob(str(PET_DIR / "*_daily_pet.nc")))
+PET_FILES = []
 
 # Groundwater inputs
 GW_FILES = [
@@ -118,8 +117,66 @@ TIME_START = "2000-01-01"
 TIME_END = "2023-12-31"
 
 # -----------------------------------------------------------------------------
+# Config override (optional)
+# -----------------------------------------------------------------------------
+# Defaults below match the original hard-coded paths (local)
+# They will be overwritten when you run: python 06a-preprocess_rf_drivers.py --config config.yaml
+LANDSEA_MASK_GRIB = Path("/mnt/data/romi/data/landsea_mask.grib")
+ERA5_PRECIP_MONTHLY_NC = Path("/mnt/data/romi/data/ERA5_monthly_tp.nc")  
+PET_MONTHLY_ZARR = Path("/mnt/data/romi/data/et_pot/monthly_sum_epot_clean.zarr")
+
+def apply_config(cfg: dict) -> None:
+    """Override module-level path constants from config.yaml."""
+    global ERA5_ROOT, PATH_T2M, PATH_TP, PATH_SWVL1, PATH_EVABS, PATH_U10, PATH_V10, PATH_BLH, PATH_CAPE, PATH_ALBEDO
+    global OUT_DIR_FINAL, OUT_DIR, PET_DIR, PET_FILES
+    global GW_FILES, GW_OUT, ENSO_CSV, GMIA_ASC, GMIA_ZARR, GEE_EXPORT_DIR, LULCC_TIF, LULCC_ZARR
+    global LANDSEA_MASK_GRIB, ERA5_PRECIP_MONTHLY_NC, PET_MONTHLY_ZARR
+
+    # Core resources
+    ERA5_ROOT = cfg_path(cfg, "resources.era5_root", must_exist=True)
+    PATH_T2M = ERA5_ROOT / "2m_temperature"
+    PATH_TP = ERA5_ROOT / "total_precipitation"
+    PATH_SWVL1 = ERA5_ROOT / "volumetric_soil_water_layer_1"
+    PATH_EVABS = ERA5_ROOT / "evaporation_from_bare_soil"
+    PATH_U10 = ERA5_ROOT / "10m_u_component_of_wind"
+    PATH_V10 = ERA5_ROOT / "10m_v_component_of_wind"
+    PATH_BLH = ERA5_ROOT / "boundary_layer_height"
+    PATH_CAPE = ERA5_ROOT / "convective_available_potential_energy"
+    PATH_ALBEDO = ERA5_ROOT / "forecast_albedo"
+
+    # Outputs
+    OUT_DIR_FINAL = cfg_path(cfg, "paths.drivers.final", mkdir=True)
+    OUT_DIR = cfg_path(cfg, "paths.drivers.intermediate", mkdir=True)
+
+    # PET daily inputs directory
+    PET_DIR = cfg_path(cfg, "resources.pet_dir", must_exist=True)
+    PET_FILES = sorted(glob(str(PET_DIR / "*_daily_pet.nc")))
+
+    # Aridity auxiliary inputs
+    ERA5_PRECIP_MONTHLY_NC = cfg_path(cfg, "resources.era5_precip_monthly_nc", must_exist=True)
+    PET_MONTHLY_ZARR = cfg_path(cfg, "resources.pet_monthly_zarr", must_exist=True)
+    LANDSEA_MASK_GRIB = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+
+    # Groundwater
+    GW_FILES = cfg_get(cfg, "resources.groundwater_depth_nc_files")
+    GW_OUT = str(cfg_path(cfg, "drivers.groundwater_table_zarr"))
+
+    # ENSO
+    ENSO_CSV = str(cfg_path(cfg, "resources.enso_index_csv", must_exist=True))
+
+    # Irrigated areas
+    GMIA_ASC = str(cfg_path(cfg, "resources.gmia_irrigated_area_asc", must_exist=True))
+    GMIA_ZARR = str(cfg_path(cfg, "drivers.irrigated_areas_zarr"))
+
+    # GEE exports + derived land cover layers
+    GEE_EXPORT_DIR = cfg_path(cfg, "resources.gee_exports_dir", mkdir=True)
+    LULCC_TIF = str(GEE_EXPORT_DIR / "Land_Cover_Features.tif")
+    LULCC_ZARR = str(cfg_path(cfg, "drivers.lulcc_zarr"))
+
+# -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
 
 def open_grib_files(folder):
    
@@ -322,7 +379,7 @@ def harmonize_grid(datasets):
 def enso_precip_correlation(enso_csv, precip_ds, precip_var = "tp"):
     """Compute correlation between monthly ENSO index and ERA5 precipitation."""
     print("Computing ENSO–precip correlation")
-    enso_df = pd.read_csv(enso_csv, delimiter=";", header=None)
+    enso_df = pd.read_csv(enso_csv, delimiter=";", header=None) 
     years = enso_df.iloc[:, 0].values
     enso_vals = enso_df.iloc[:, 1:].values.flatten()
 
@@ -401,19 +458,21 @@ def restructure_lulcc_geotiff_to_zarr(geotiff_path, out_zarr):
     print(f"Restructuring LULCC GeoTIFF: {geotiff_path}")
     ds = xr.open_dataset(geotiff_path, engine="rasterio")
 
-    # Bounding box for weird artifact fix (lat 65..85, lon -100..5) on band=1 only
-    lat_name = "y"
-    lon_name = "x"
-    mask = (ds[lat_name] >= 65) & (ds[lat_name] <= 85) & (ds[lon_name] >= -100) & (ds[lon_name] <= 5)
+    # Rename to lon/lat up front so downstream works
+    ds = ds.rename({"x": "lon", "y": "lat"})
+    ds = ds.sortby("lon")
+    ds = ds.sortby("lat")
+
+    # Mask artifact region (lat 65..85, lon -100..5) on band=1 only
+    mask = (ds["lat"] >= 65) & (ds["lat"] <= 85) & (ds["lon"] >= -100) & (ds["lon"] <= 5)
 
     band0 = ds.band_data.isel(band=0)  # category
     band1 = ds.band_data.isel(band=1)  # change
-    band1_masked = band1.where(~mask, 0)
+    band1 = band1.where(~mask, 0)
 
-    # Rename coords and drop 'band' dim
-    ds_ren = ds.rename({"x": "lon", "y": "lat"})
-    category = band0.drop_vars("band")
-    change = band1_masked.drop_vars("band")
+    # Drop band dim cleanly
+    category = band0.drop_vars("band", errors="ignore")
+    change   = band1.drop_vars("band", errors="ignore")
 
     out = xr.Dataset({"category": category, "change": change})
     out = finalize_geospatial(out)
@@ -421,7 +480,7 @@ def restructure_lulcc_geotiff_to_zarr(geotiff_path, out_zarr):
     return out
 
 
-def calculate_aridity_index(out_zarr): 
+def calculate_aridity_index(out_zarr, cfg): 
 
     AI_MEAN_MAX = 100.0        
 
@@ -431,7 +490,7 @@ def calculate_aridity_index(out_zarr):
 
     # --- Precip (ERA5 monthly total precip 2000–2023) ---
     precip = xr.open_dataset(
-        "/mnt/data/romi/data/ERA5_0.25_monthly/total_precipitation/total_precipitation_monthly.nc"
+        str(ERA5_PRECIP_MONTHLY_NC)
     ).sel(time=slice("2000-01-01", "2023-12-31"))
     precip = precip.rename({"latitude": "lat", "longitude": "lon"})
     precip = precip.rio.write_crs("EPSG:4326")
@@ -439,7 +498,8 @@ def calculate_aridity_index(out_zarr):
     precip.rio.set_spatial_dims("lon", "lat", inplace=True)
 
     # Land-sea mask to drop ocean
-    ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    ds_mask = xr.open_dataset(mask_path, engine="cfgrib")
     ds_mask = ds_mask.rename({"latitude": "lat", "longitude": "lon"})
     ds_mask = ds_mask.rio.write_crs("EPSG:4326")
     ds_mask = wrap_to_180(ds_mask, "lon")
@@ -461,7 +521,7 @@ def calculate_aridity_index(out_zarr):
     ))
 
     # --- PET (monthly) ---
-    pet = xr.open_dataset("/mnt/data/romi/data/et_pot/monthly_sum_epot_clean.zarr").sel(
+    pet = xr.open_dataset(PET_MONTHLY_ZARR).sel(
         time=slice("2000-01-01", "2023-11-30")
     )
     pet["time"] = ("time", pd.date_range(
@@ -722,7 +782,7 @@ def run_gee_fire():
 # Main
 
 
-def main():
+def main(cfg):
     # ERA5 temperature
     if RUN_ERA5_T2M:
         print("Processing ERA5 2m Temperature")
@@ -772,7 +832,10 @@ def main():
             process_concatenate_pet(PET_FILES, "pet", str(OUT_DIR / "driver_pet.zarr"))
 
     if RUN_ARIDITY: 
-        calculate_aridity_index(out_zarr = str(OUT_DIR_FINAL / "driver_aridity.zarr"))
+        calculate_aridity_index(
+            out_zarr=str(OUT_DIR_FINAL / "driver_aridity.zarr"),
+            cfg=cfg,
+        )
 
     # Boundary layer height
     if RUN_ERA5_T2M: 
@@ -862,4 +925,11 @@ def main():
 
 if __name__ == "__main__":
 
-    main()
+    parser = argparse.ArgumentParser(description="Preprocess RF driver layers")
+    parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    apply_config(cfg)
+
+    main(cfg)

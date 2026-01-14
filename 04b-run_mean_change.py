@@ -1,10 +1,14 @@
 import os
 import sys
 import argparse
+from pathlib import Path
+
 import numpy as np
 import xarray as xr
 from scipy import stats
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from utils.config import load_config, cfg_path, cfg_get
 
 
 """
@@ -20,31 +24,27 @@ Eg.:
     python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_precip_final/out_precip.zarr --workers 2
     python 04b-run_mean_change.py --input /mnt/data/romi/output/paper_1/output_Et_final/out_Et.zarr --workers 4
 """
-
-
-def mean_change_func(ds, var, alpha = 0.05):
-
+def mean_change_func(ds, var, alpha=0.05):
     """Compute change in mean (second-half minus first-half) along time plus Welch's t-test."""
 
-    # Determine equal-length halves based on time 
     n_time = ds.dims.get("time", None)
     if n_time is None or n_time < 2:
-        # Not enough data to split sensibly
         da = ds[var]
-        out = xr.full_like(da.isel(time=0, drop=True), fill_value=np.nan).to_dataset(name=f"{var}_mean_change")
+        out = xr.full_like(da.isel(time=0, drop=True), fill_value=np.nan).to_dataset(
+            name=f"{var}_mean_change"
+        )
         out[f"{var}_ttest_t"] = xr.full_like(out[f"{var}_mean_change"], np.nan)
         out[f"{var}_ttest_p"] = xr.full_like(out[f"{var}_mean_change"], np.nan)
         out[f"{var}_mean_change_sig"] = xr.full_like(out[f"{var}_mean_change"], np.nan)
         return out
 
     mid = n_time // 2
-    len_half = min(mid, n_time - mid)  # equalize lengths if odd 
+    len_half = min(mid, n_time - mid)
 
-    # Slice equal-length halves
     first_half = ds[var].isel(time=slice(mid - len_half, mid))
     second_half = ds[var].isel(time=slice(mid, mid + len_half))
 
-    # Reindex time to 0..len_half-1 so apply_ufunc has aligned dimensions (fails otherwise)
+    # Align "time" coords so apply_ufunc doesn't complain about misaligned core dims
     first_half = first_half.assign_coords(time=np.arange(len_half))
     second_half = second_half.assign_coords(time=np.arange(len_half))
 
@@ -53,7 +53,6 @@ def mean_change_func(ds, var, alpha = 0.05):
         mean_b = np.nanmean(b) if np.any(np.isfinite(b)) else np.nan
         diff = mean_b - mean_a
 
-        # If fewer than 2 total points per group,return nan
         n_a = np.isfinite(a).sum()
         n_b = np.isfinite(b).sum()
         if n_a < 2 or n_b < 2:
@@ -84,14 +83,12 @@ def mean_change_func(ds, var, alpha = 0.05):
 
 def _worker_compute(varname, input_path, tmp_dir, alpha):
     """
-    For var, open input_path, compute mean change and t-test,
-    and write to a temporary store under tmp_dir/varname.zarr
-    Returns the path to the temp store.
+    Open input_path, compute mean change + t-test for varname,
+    and write tmp_dir/varname.zarr
     """
-    ds = xr.open_zarr(input_path).chunk({"time": -1, "lat": 50, "lon": 50})
+    ds = xr.open_dataset(input_path, chunks={"time": -1, "lat": 50, "lon": 50})
     out_ds = mean_change_func(ds, varname, alpha=alpha)
 
-    # Clean encoding in case it makes it faster
     for v in out_ds.data_vars:
         out_ds[v].encoding.pop("chunks", None)
 
@@ -101,27 +98,53 @@ def _worker_compute(varname, input_path, tmp_dir, alpha):
     if os.path.exists(out_store):
         import shutil
         shutil.rmtree(out_store)
+
     out_ds.to_zarr(out_store, mode="w")
     return out_store
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Compute change in mean (second half minus first) with Welch's t-test in parallel, then merge."
+        description="Compute mean change (2nd half - 1st half) with Welch's t-test in parallel, then merge."
     )
-    p.add_argument("--input",   required=True, help="path/to/input.zarr")
-    p.add_argument("--workers", type=int, default=4, help="parallel processes")
-    p.add_argument("--alpha",   type=float, default=0.05,
-                   help="Significance threshold for p-value (default 0.05)")
-    args = p.parse_args()
 
-    inp = args.input
-    if not os.path.exists(inp):
-        print("Input not found:", inp, file=sys.stderr)
+    # Inputs: either explicit --input OR infer from config via --var (+ optional --suffix)
+    p.add_argument("--var", default=None, help="sm, Et, precip (only needed if --input omitted)")
+    p.add_argument("--suffix", default=None,
+                   help="Optional suffix for inferred dataset (e.g. breakpoint_stc).")
+    p.add_argument("--input", default=None,
+                   help="Optional override path to input zarr. If omitted, inferred from config + --var + --suffix.")
+
+    p.add_argument("--workers", type=int, default=4, help="parallel processes")
+    p.add_argument("--alpha", type=float, default=0.05,
+                   help="Significance threshold for p-value (default 0.05)")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+
+    args = p.parse_args()
+    cfg = load_config(args.config)
+
+    outputs_root = Path(cfg_path(cfg, "paths.outputs_root", must_exist=True))
+
+    def _sfx(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        return s if s.startswith("_") else f"_{s}"
+
+    if args.input:
+        inp = Path(args.input)
+    else:
+        if not args.var:
+            print("If --input is omitted, you must provide --var (sm, Et, precip).", file=sys.stderr)
+            sys.exit(1)
+        inp = outputs_root / "zarr" / f"out_{args.var}{_sfx(args.suffix)}.zarr"
+
+    if not inp.exists():
+        print("Input not found:", str(inp), file=sys.stderr)
         sys.exit(1)
 
     # Choose variables
-    ds0 = xr.open_zarr(inp, chunks={})
+    ds0 = xr.open_dataset(str(inp), chunks={})
     suffixes = ("ac1", "std", "skew", "kurt", "fd")
     vars_ = [
         v for v in ds0.data_vars
@@ -130,25 +153,26 @@ def main():
            and v.count("_") == 1
     ]
     ds0.close()
+
     if not vars_:
         print("No matching variables found!", file=sys.stderr)
         sys.exit(1)
+
     print("Will process:", vars_)
 
-    # Prep final out path
-    base = os.path.splitext(os.path.basename(inp))[0]
-    final_store = os.path.join(os.path.dirname(inp), base + "_meanchange.zarr")
+    # Output next to input (same behavior as original script)
+    base = os.path.splitext(os.path.basename(str(inp)))[0]
+    final_store = os.path.join(os.path.dirname(str(inp)), base + "_meanchange.zarr")
     if os.path.exists(final_store):
         print("Output already exists:", final_store)
         sys.exit(0)
 
-    # Temp dir 
-    tmp_dir = os.path.join(os.path.dirname(inp), base + "_meanchange_temp")
+    tmp_dir = os.path.join(os.path.dirname(str(inp)), base + "_meanchange_temp")
     os.makedirs(tmp_dir, exist_ok=True)
 
     with ProcessPoolExecutor(max_workers=args.workers) as exe:
         futures = {
-            exe.submit(_worker_compute, v, inp, tmp_dir, args.alpha): v
+            exe.submit(_worker_compute, v, str(inp), tmp_dir, args.alpha): v
             for v in vars_
         }
         done = 0
@@ -157,20 +181,17 @@ def main():
             try:
                 store_path = fut.result()
                 done += 1
-                print(f"[{done}/{len(vars_)}] done {v} → {store_path}")
+                print(f"[{done}/{len(vars_)}] done {v} -> {store_path}")
             except Exception as e:
                 print(f"[ERROR] {v}: {e}", file=sys.stderr)
 
-    # Merge all per-var stores into one
     print("Merging into final store:", final_store)
-    parts = [xr.open_zarr(os.path.join(tmp_dir, f"{v}.zarr")) for v in vars_]
+    parts = [xr.open_dataset(os.path.join(tmp_dir, f"{v}.zarr")) for v in vars_]
     merged = xr.merge(parts)
 
-    # Write merged
     merged.chunk({"lat": 50, "lon": 50}).to_zarr(final_store, mode="w", consolidated=True)
     print("All done. Final store at:", final_store)
 
-    # Cleanup
     import shutil
     shutil.rmtree(tmp_dir)
 

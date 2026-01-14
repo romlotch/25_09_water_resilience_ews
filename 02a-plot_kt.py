@@ -14,6 +14,8 @@ import regionmask
 import cartopy.io.shapereader as shpreader
 from shapely.geometry import box
 from scipy import ndimage
+from utils.config import load_config, cfg_path
+from pathlib import Path
 
 """ 
 Plots and saves 5-panel figure of individual indicators and 
@@ -375,10 +377,6 @@ def plot_five_panel(ds: xr.Dataset, var_prefix: str, outdir: str,
         fig.savefig(outfile, format='png', dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        # Colorbar (per-figure)
-        cbar = fig.colorbar(sc, ax=ax, orientation="horizontal", shrink=0.6, pad=0.05)
-        cbar.set_label(f"{label} Kendall τ")
-
         # Standalone colorbar (SVG)
         fig_cb, ax_cb = plt.subplots(figsize=(4, 0.4))
         norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
@@ -386,7 +384,7 @@ def plot_five_panel(ds: xr.Dataset, var_prefix: str, outdir: str,
             mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
             cax=ax_cb, orientation='horizontal'
         )
-        cb1.set_label(f"{label} Kendall τ")
+        cb1.set_label(f"{label} Kendall tau")
         cb1.ax.tick_params(labelsize=8)
         fig_cb.subplots_adjust(bottom=0.5, top=0.9, left=0.05, right=0.95)
         colorbar_outfile = os.path.join(outdir, f"colorbar_{base}.svg")
@@ -656,16 +654,41 @@ def plot_fd_magnitude(ds: xr.Dataset, var_prefix: str, outdir: str, cmap, lighte
 # --- Main ---
 
 def main():
-    parser = argparse.ArgumentParser(description="Make maps of Kendall Tau output.")
-    parser.add_argument("--dataset", required=True, help="Path to NetCDF/Zarr dataset (e.g., out_sm_kt.zarr)")
-    parser.add_argument("--var", required=True, help="Variable prefix (e.g., sm, Et, precip)")
-    parser.add_argument("--outdir", required=True, help="Output directory for figures")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Make maps of Kendall Tau output.")
+    p.add_argument("--var", required=True, help="Variable prefix (e.g., sm, Et, precip)")
+    p.add_argument("--suffix", default=None,
+                help="Optional suffix (e.g. breakpoint_stc). Used to infer dataset path if --dataset not provided.")
+    p.add_argument("--dataset", default=None,
+                help="Optional override path to *_kt.zarr. If omitted, inferred from config + --var + --suffix.")
+    p.add_argument("--outdir", default=None,
+                help="Optional override output directory. If omitted, uses outputs/figures/kt/<var>/ under outputs_root.")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
 
-    ds = open_source_ds(args.dataset)
+    args = p.parse_args()
+    cfg = load_config(args.config)
+
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", must_exist=True)
+
+    def _sfx(s):
+        if not s: return ""
+        return s if str(s).startswith("_") else f"_{s}"
+
+    # default dataset: outputs/zarr/out_<var><_suffix>_kt.zarr
+    default_ds = Path(outputs_root) / "zarr" / f"out_{args.var}{_sfx(args.suffix)}_kt.zarr"
+    ds_path = Path(args.dataset) if args.dataset else default_ds
+
+    # default outdir: outputs/figures/kt/<var>/
+    default_outdir = Path(outputs_root) / "figures" / "kt" / args.var
+    outdir = Path(args.outdir) if args.outdir else default_outdir
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    ds = open_source_ds(str(ds_path))
+
 
     """ if args.var == "precip":
-        ds_mask = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib", engine="cfgrib")
+        mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+        ds_mask = xr.open_dataset(mask_path, engine="cfgrib")
 
         ds_mask = ds_mask.rio.write_crs('EPSG:4326')
         ds_mask = ds_mask.assign_coords(longitude=(((ds_mask.longitude + 180) % 360) - 180)).sortby('longitude')
@@ -681,16 +704,16 @@ def main():
         ds = ds.where(mask) """
 
     # 1) individual indicators
-    plot_five_panel(ds, args.var, args.outdir)
+    plot_five_panel(ds, args.var, str(outdir))
 
     # 2) bivariate AC1 & STD (+ legend)
-    plot_bivariate(ds, args.var, 'ac1', 'std', args.outdir, cmap_a=cmap, cmap_b=cmap)
+    plot_bivariate(ds, args.var, 'ac1', 'std', str(outdir), cmap_a=cmap, cmap_b=cmap)
 
     # 3) bivariate Skew & Kurt (+ legend)
-    plot_bivariate(ds, args.var, 'skew', 'kurt', args.outdir, cmap_a=cmap, cmap_b=cmap)
+    plot_bivariate(ds, args.var, 'skew', 'kurt', str(outdir), cmap_a=cmap, cmap_b=cmap)
 
     # 4) FD map
-    plot_fd_magnitude(ds, args.var, args.outdir,  cmap = cmap, lighten = -0.5)
+    plot_fd_magnitude(ds, args.var, str(outdir),  cmap = cmap, lighten = -0.5)
 
 
 if __name__ == "__main__":

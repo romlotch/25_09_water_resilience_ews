@@ -10,7 +10,9 @@ import matplotlib as mpl
 import geopandas as gpd
 import rioxarray  
 import matplotlib.colors as mcolors
+from pathlib import Path    
 from collections import OrderedDict
+from utils.config import load_config, cfg_path, cfg_get
 
 """ 
 Plots bar graphs of the percentage of land area of increasing or decreasing indicators. 
@@ -58,20 +60,20 @@ INDICATOR_COLORS = {
 
 # --- CLI ---
 def parse_args():
-    ap = argparse.ArgumentParser(
-        description="Grouped biome stacked bars (Decrease/Neutral/Increase) per indicator."
-    )
-    ap.add_argument("--dataset", required=True, help="Path to NetCDF/Zarr dataset (e.g., out_sm_kt.zarr)")
-    ap.add_argument("--var", required=True, help="Variable prefix (e.g., sm, Et, precip)")
-    ap.add_argument("--outdir", required=True, help="Output directory")
-    ap.add_argument("--mode", choices=["indicators", "combined"], default="indicators",
-                    help="Plot raw indicators (5 panels) or composite signals (5 panels).")
-    return ap.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--var", required=True, help="sm, Et, precip")
+    p.add_argument("--suffix", default=None,
+                   help="Optional suffix for inferred dataset (e.g. breakpoint_stc).")
+    p.add_argument("--dataset", default=None,
+                   help="Optional override path to *_kt.zarr. If omitted, inferred from config + --var + --suffix.")
+    p.add_argument("--outdir", default=None,
+                   help="Optional override output directory. If omitted, uses outputs_root/figures/biomes/<var>/")
+    p.add_argument("--mode", choices=["indicators", "combined"], default="indicators")
+    p.add_argument("--config", default="config.yaml")
+
+    return p.parse_args()
 
 # --- Data & helpers ---
-TNC_SHP = "/mnt/data/romi/data/terr-ecoregions-TNC/tnc_terr_ecoregions.shp"
-
-
 
 BIOMES = [
     'Tropical and Subtropical Moist Broadleaf Forests',
@@ -208,14 +210,13 @@ def combined_family_masks(ds, prefix):
     ])
 
 
-def get_biomes(biome):
-    fp = TNC_SHP
-    data = gpd.read_file(fp, where=f"WWF_MHTNAM='{biome}'")
+def get_biomes(biome: str, tnc_shp: str):
+    data = gpd.read_file(tnc_shp, where=f"WWF_MHTNAM='{biome}'")
     unique_ids = [i for i in data.WWF_MHTNAM.unique()]
     unique_num = [i for i in data.WWF_MHTNUM.unique()]
     biomes_df = pd.DataFrame(unique_ids)
-    biomes_df['label'] = unique_num
-    pd.set_option('display.max_colwidth', None)
+    biomes_df["label"] = unique_num
+    pd.set_option("display.max_colwidth", None)
     return data, biomes_df
 
 def clip_biomes(ds, gdf):
@@ -298,12 +299,32 @@ def combined_signal_masks(ds, prefix):
 # ---------------- Main ----------------
 def main():
     args = parse_args()
-    os.makedirs(args.outdir, exist_ok=True)
+    cfg = load_config(args.config)
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", must_exist=True)
+
+    def _sfx(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        return s if s.startswith("_") else f"_{s}"
+
+    default_ds = Path(outputs_root) / "zarr" / f"out_{args.var}{_sfx(args.suffix)}_kt.zarr"
+    ds_path = Path(args.dataset) if args.dataset else default_ds
+
+    default_outdir = Path(outputs_root) / "figures" / "biomes" / args.var
+    outdir = Path(args.outdir) if args.outdir else default_outdir
+    outdir.mkdir(parents=True, exist_ok=True)
+
+
+
+    TNC_SHP = str(cfg_path(cfg, "resources.tnc_biomes_shapefile", must_exist=True))
+    
 
     # dataset + masks (
-    ds = xr.open_dataset(args.dataset)
-    urban_mask = xr.open_dataset('/mnt/data/romi/data/urban_mask.zarr')
-    crop_mask  = xr.open_dataset('/mnt/data/romi/data/crop_mask.zarr')
+    ds = xr.open_dataset(str(ds_path))
+    urban_mask = xr.open_dataset(cfg_path(cfg, "resources.urban_mask_zarr", must_exist=True))
+    crop_mask  = xr.open_dataset(cfg_path(cfg, "resources.crop_mask_zarr", must_exist=True))
 
     urban_mask = urban_mask.rio.write_crs("EPSG:4326")
     crop_mask  = crop_mask.rio.write_crs("EPSG:4326")
@@ -316,7 +337,7 @@ def main():
 
     prefix = args.var  # e.g., "sm", "Et", "precip"
 
-    IRRIG_PATH = "/mnt/data/romi/data/driver_analysis/global_irrigated_areas.zarr"
+    IRRIG_PATH = cfg_path(cfg, "resources.irrigated_areas", must_exist=True)
     IRRIG_THRESH_PERCENT = 60.0  # AEI > 60% = considered irrigated and excluded from cropland biome
 
     irrig_ds = xr.open_dataset(IRRIG_PATH).rio.write_crs("EPSG:4326").interp_like(ds, method="nearest")
@@ -342,7 +363,7 @@ def main():
        
         group_totals = {k: {g: {"dec":0.0,"neu":0.0,"inc":0.0,"tot":0.0} for g in groups_plot} for k,_ in indicators}
 
-        # natural biomes → grouped
+        # natural biomes to grouped
         for biome in BIOMES:
             if biome == "Mangroves":
                 continue
@@ -350,7 +371,7 @@ def main():
             if grp is None:
                 continue
 
-            gdf, _ = get_biomes(biome)
+            gdf, _ = get_biomes(biome, tnc_shp=str(TNC_SHP))
             clipped = clip_biomes(ds, gdf)
 
             valid_biome_mask = ((urban_mask <= 3) | urban_mask.isnull()) & (~crop_only)
@@ -365,7 +386,7 @@ def main():
                 acc = group_totals[key][grp]
                 acc["dec"] += dec_a; acc["neu"] += neu_a; acc["inc"] += inc_a; acc["tot"] += tot_a
 
-        # pseudo-biome: cropland
+        # pseudo-biome: cropland (not rainfed only)
         grp = "Cropland"
         crop_clipped = ds.where(rainfed_cropland)
         area_da = area_da_for(crop_clipped)
@@ -434,7 +455,7 @@ def main():
             ax.margins(y=0.02)
 
         plt.tight_layout()
-        out_svg = os.path.join(args.outdir, f"{prefix}_kt_biomes.svg")
+        out_svg = os.path.join(str(outdir), f"{prefix}_kt_biomes.svg")
         fig.savefig(out_svg, format='svg', dpi=300, bbox_inches='tight', facecolor='white')
         plt.show()
         plt.close(fig)
@@ -449,7 +470,8 @@ def main():
     families = combined_family_masks(ds, prefix)
 
     # Land-sea mask for denominators
-    lsm = xr.open_dataset("/mnt/data/romi/data/landsea_mask.grib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    lsm = xr.open_dataset(mask_path, engine="cfgrib")
     lsm = lsm.rename({"latitude": "lat", "longitude": "lon"}).rio.write_crs("EPSG:4326")
     lsm = lsm.assign_coords(lon=((lsm.lon + 180) % 360) - 180).sortby("lon")
     lsm = lsm.interp_like(ds, method="nearest")
@@ -498,7 +520,7 @@ def main():
         if grp is None:
             continue
 
-        gdf, _ = get_biomes(biome)
+        gdf, _ = get_biomes(biome, tnc_shp=str(TNC_SHP))
         bmask = biome_mask_from_gdf(gdf)
 
         
@@ -524,7 +546,7 @@ def main():
     for fam_name, cats in families.items():
         family_acc[fam_name][grp]["den"] += crop_denom_area
         for cat_name, cat_mask in cats.items():
-            hit_area = float(area_da.where(land & crop_only & non_urban & cat_mask).sum().values)
+            hit_area = float(area_da.where(land & rainfed_cropland & non_urban & cat_mask).sum().values)
             family_acc[fam_name][grp]["cats"][cat_name] += hit_area
 
     family_dfs = {}
@@ -634,7 +656,7 @@ def main():
         if leg is not None:
             leg.set_visible(False)
 
-    out_svg = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families.svg")
+    out_svg = os.path.join(str(outdir), f"{prefix}_kt_biomes_combined_families.svg")
     fig.savefig(
         out_svg,
         format="svg",
@@ -644,7 +666,7 @@ def main():
         facecolor="white",
     )
 
-    out_pdf = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families.pdf")
+    out_pdf = os.path.join(str(outdir), f"{prefix}_kt_biomes_combined_families.pdf")
     fig.savefig(
         out_pdf,
         format="pdf",
@@ -676,7 +698,7 @@ def main():
     comb_tidy["Group"] = pd.Categorical(comb_tidy["Group"], categories=groups_plot, ordered=True)
     comb_tidy = comb_tidy.sort_values(["Family", "Category", "Group"])
 
-    out_csv_tidy = os.path.join(args.outdir, f"{prefix}_kt_biomes_combined_families_tidy.csv")
+    out_csv_tidy = os.path.join(str(outdir), f"{prefix}_kt_biomes_combined_families_tidy.csv")
     comb_tidy.to_csv(out_csv_tidy, index=False)
     print(f"Saved combined-family percentages (tidy) to: {out_csv_tidy}")
 

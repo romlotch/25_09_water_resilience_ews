@@ -1,0 +1,88 @@
+project:
+  repo_root: "."
+
+paths:
+  data_root: "data"          # where your large input datasets live (not tracked)
+  outputs_root: "outputs"    # everything generated goes here
+  drivers:
+    final: /path/to/driver_analysis_final
+    intermediate: /path/to/driver_analysis
+
+  ml_results: /path/to/xgboost_results
+
+resources:
+  landsea_mask_grib: "data/resources/landsea_mask.grib"
+  tnc_biomes_shapefile: "resources/biomes/tnc_terr_ecoregions.shp"
+  
+  urban_mask_zarr: "resources/masks/urban_mask.zarr"
+  crop_mask_zarr: "resources/masks/crop_mask.zarr"
+  irrigated_areas: "resources/masks/irrigated_areas.zarr"
+
+  era5_root: /path/to/ERA5_0.25_monthly
+  pet_dir: /path/to/pet_daily_netcdf_folder
+  era5_precip_monthly_nc: /path/to/era5_tp_monthly_2000_2023.nc
+  pet_monthly_zarr: /path/to/monthly_pet.zarr
+
+  groundwater_depth_nc_files:
+    - /path/to/GW_table_depth/AFRICA_WTD_monthlymeans.nc
+    - /path/to/GW_table_depth/EURASIA_WTD_monthlymeans.nc
+    - /path/to/GW_table_depth/NAMERICA_WTD_monthlymeans.nc
+    - /path/to/GW_table_depth/OCEANIA_WTD_monthlymeans.nc
+    - /path/to/GW_table_depth/SAMERICA_WTD_monthlymeans.nc
+
+  enso_index_csv: /path/to/enso_index.csv
+  gmia_irrigated_area_asc: /path/to/gmia.asc
+  gee_exports_dir: /path/to/GEE_exports
+
+
+
+drivers:
+  # where parts of 06a write ouputs to
+  groundwater_table_zarr: /path/to/driver_analysis/driver_groundwater_table.zarr
+  irrigated_areas_zarr: /path/to/driver_analysis/global_irrigated_areas.zarr
+  lulcc_zarr: /path/to/driver_analysis/lulcc.zarr
+
+ml:
+  predictors:
+    sm:
+      - /path/to/driver_temperature.zarr
+      - /path/to/driver_precipitation.zarr
+      - /path/to/driver_soil_moisture.zarr
+      - /path/to/driver_transpiration.zarr
+      - /path/to/driver_pet.zarr
+      - /path/to/driver_aridity.zarr
+      - /path/to/driver_groundwater_table.zarr
+      - /path/to/driver_GPP.zarr
+      - /path/to/driver_tree_cover.zarr
+      - /path/to/driver_non_tree_cover.zarr
+      - /path/to/driver_enso.zarr
+      - /path/to/driver_crop_cover.zarr
+    Et:
+      - /path/to/driver_temperature.zarr
+      - /path/to/driver_precipitation.zarr
+      - /path/to/driver_soil_moisture.zarr
+      - /path/to/driver_transpiration.zarr
+      - /path/to/driver_pet.zarr
+      - /path/to/driver_aridity.zarr
+      - /path/to/driver_albedo.zarr
+      - /path/to/driver_boundary_layer_height.zarr
+      - /path/to/driver_GPP.zarr
+      - /path/to/driver_tree_cover.zarr
+      - /path/to/driver_non_tree_cover.zarr
+      - /path/to/driver_crop_cover.zarr
+      - /path/to/driver_vpd.zarr
+      - /path/to/driver_groundwater_table.zarr
+    precip:
+      - /path/to/driver_temperature.zarr
+      - /path/to/driver_precipitation.zarr
+      - /path/to/driver_soil_moisture.zarr
+      - /path/to/driver_transpiration.zarr
+      - /path/to/driver_pet.zarr
+      - /path/to/driver_cape.zarr
+      - /path/to/driver_boundary_layer_height.zarr
+      - /path/to/driver_albedo.zarr
+      - /path/to/driver_GPP.zarr
+      - /path/to/driver_tree_cover.zarr
+      - /path/to/driver_non_tree_cover.zarr
+      - /path/to/driver_crop_cover.zarr
+      - /path/to/driver_enso.zarr

@@ -3,15 +3,15 @@ import os
 import sys
 import argparse
 import pandas as pd
-import builtins
-import psutil._common
 import numpy as np
 import xarray as xr
+import rioxarray
 from scipy.stats import kendalltau
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from dask.distributed import Client, LocalCluster
-
+from utils.config import load_config, cfg_path
+from pathlib import Path
 
 
 '''
@@ -101,7 +101,7 @@ def ktfunc(ds: xr.Dataset, var: str) -> xr.Dataset:
     return out
 
 
-def _maybe_apply_precip_landmask(ds: xr.Dataset, varname: str) -> xr.Dataset:
+def _maybe_apply_precip_landmask(ds: xr.Dataset, varname: str, cfg) -> xr.Dataset:
     """
     If varname is 'precip' or starts with 'precip_', apply land/sea mask
     before anything else. Expects ds to have coords (lat, lon) but mask has latitude longitde.
@@ -110,7 +110,8 @@ def _maybe_apply_precip_landmask(ds: xr.Dataset, varname: str) -> xr.Dataset:
         return ds
 
     # Open land/sea mask 
-    mask_ds = xr.open_dataset("/home/romi/ews/data/landsea_mask.grib", engine="cfgrib")
+    mask_path = cfg_path(cfg, "resources.landsea_mask_grib", must_exist=True)
+    mask_ds = xr.open_dataset(mask_path, engine="cfgrib")
 
     mask_ds = mask_ds.rio.write_crs("EPSG:4326")
     mask_ds = mask_ds.assign_coords(longitude=(((mask_ds.longitude + 180) % 360) - 180)).sortby("longitude")
@@ -127,7 +128,7 @@ def _maybe_apply_precip_landmask(ds: xr.Dataset, varname: str) -> xr.Dataset:
     return ds.where(land)
 
 
-def _worker_compute(varname, input_path, tmpl_store, tmp_dir, trim=False):
+def _worker_compute(varname, input_path, tmpl_store, tmp_dir, trim=False, cfg=None) -> str:
     """
     For suffix 'varname', open input_path, compute kendall-τ,
     and write to a temporary store under tmp_dir/varname.zarr
@@ -135,7 +136,7 @@ def _worker_compute(varname, input_path, tmpl_store, tmp_dir, trim=False):
     """
     ds = xr.open_zarr(input_path).chunk({"time": -1, "lat": 100, "lon": 100})
 
-    ds = _maybe_apply_precip_landmask(ds, varname)
+    ds = _maybe_apply_precip_landmask(ds, varname, cfg)
     if trim:
         ds = _trim(ds)
 
@@ -159,11 +160,32 @@ def main():
     p = argparse.ArgumentParser(
         description="Compute Kendall tau in parallel, then merge."
     )
-    p.add_argument("--input",   required=True, help="path/to/input.zarr")
+    p.add_argument("--variable", required=False, default=None,
+               help="Variable key (sm|Et|precip). Used to infer --input if not provided.")
+    p.add_argument("--suffix", required=False, default=None,
+                help="Optional suffix (e.g. breakpoint_stc). Used to infer --input if not provided.")
+    p.add_argument("--input", required=False, default=None,
+                help="Optional override input zarr. If omitted, inferred from config + --variable + --suffix.")
     p.add_argument("--workers", type=int, default=4, help="Processes if not using Dask")
     p.add_argument("--dask-workers", type=int, default=0, help="Use Dask LocalCluster with this many workers (threads_per_worker=1)")
     p.add_argument("--trim", action="store_true")
+    p.add_argument("--config", default="config.yaml", help="Path to config YAML")
+
     args = p.parse_args()
+    cfg = load_config(args.config)
+
+    outputs_root = cfg_path(cfg, "paths.outputs_root", must_exist=True)
+
+    def _sfx(s):
+        if not s: return ""
+        return s if str(s).startswith("_") else f"_{s}"
+
+    if args.input is None:
+        if args.variable is None:
+            raise ValueError("Provide --input or --variable (and optionally --suffix).")
+        input_path = Path(outputs_root) / "zarr" / f"out_{args.variable}{_sfx(args.suffix)}.zarr"
+    else:
+        input_path = Path(args.input)
 
 
     maybe_client_ctx = nullcontext()
@@ -175,7 +197,7 @@ def main():
     with maybe_client_ctx:
 
         # Figure out which vars to do
-        ds0 = xr.open_zarr(args.input, chunks={})
+        ds0 = xr.open_zarr(str(input_path), chunks={})
         suffixes = ("ac1", "std", "skew", "kurt", "fd")
 
         vars_ = [
@@ -190,31 +212,38 @@ def main():
             print("No matching variables found.", file=sys.stderr)
             sys.exit(1)
         
-        base = os.path.splitext(os.path.basename(args.input))[0]
-        final_store = os.path.join(os.path.dirname(args.input), base + "_kt.zarr")
+        base = os.path.splitext(os.path.basename(str(input_path)))[0]
+        final_store = os.path.join(os.path.dirname(str(input_path)), base + "_kt.zarr")
         if os.path.exists(final_store):
             print("Output already exists:", final_store); sys.exit(0)
 
-        tmp_dir = os.path.join(os.path.dirname(args.input), base + "_kt_temp")
-        os.makedirs(tmp_dir, exist_ok=True)
+        base = input_path.stem  # e.g. out_sm or out_sm_breakpoint_stc
+        zarr_dir = Path(outputs_root) / "zarr"
+        zarr_dir.mkdir(parents=True, exist_ok=True)
+
+        final_store = zarr_dir / f"{base}_kt.zarr"
+        tmp_dir = zarr_dir / f"{base}_kt_temp"
 
         if args.dask_workers > 0: 
 
             # if dask workers is specified, process the vars squentially and distribute across cluster 
             for v in vars_:
-                ds = xr.open_zarr(args.input).chunk({"time": -1, "lat": 100, "lon": 100})
-                ds = _maybe_apply_precip_landmask(ds, v)
+                ds = xr.open_zarr(str(input_path)).chunk({"time": -1, "lat": 100, "lon": 100})
+                ds = _maybe_apply_precip_landmask(ds, v, cfg)
                 if args.trim:
                     ds = _trim(ds)
                 tau_ds = ktfunc(ds, v)  # returns Dask arrays
                 tau_ds = tau_ds.chunk({"lat": 100, "lon": 100})
-                tau_ds.to_zarr(os.path.join(tmp_dir, f"{v}.zarr"), mode="w", consolidated=True)
+                tau_ds.to_zarr(os.path.join(str(tmp_dir), f"{v}.zarr"), mode="w", consolidated=True)
 
         else: 
 
             # if not just use process pools 
             with ProcessPoolExecutor(max_workers=args.workers) as exe:
-                futures = {exe.submit(_worker_compute, v, args.input, final_store, tmp_dir, args.trim): v for v in vars_}
+                futures = {
+                            exe.submit(_worker_compute, v, str(input_path), str(final_store), str(tmp_dir), args.trim, cfg): v
+                            for v in vars_
+                        }
                 done = 0
                 for fut in as_completed(futures):
                     v = futures[fut]
@@ -226,14 +255,16 @@ def main():
 
 
         # merge per-variable outputs
-        parts = [xr.open_zarr(os.path.join(tmp_dir, f"{v}.zarr")) for v in vars_]
+        parts = [xr.open_zarr(os.path.join(str(tmp_dir), f"{v}.zarr")) for v in vars_]
         merged = xr.merge(parts)
-        merged.chunk({"lat": 100, "lon": 100}).to_zarr(final_store, mode="w", consolidated=True)
-        print("All done. Final store at:", final_store)
+        merged.chunk({"lat": 100, "lon": 100}).to_zarr(str(final_store), mode="w", consolidated=True)
+        for pds in parts:
+            pds.close()
+        print("All done. Final store at:", str(final_store))
 
         # cleanup
         import shutil
-        shutil.rmtree(tmp_dir)
+        shutil.rmtree(str(tmp_dir))
 
     
 if __name__ == "__main__":
