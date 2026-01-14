@@ -3,6 +3,7 @@ import os
 import argparse
 import numpy as np
 import pandas as pd
+import rioxarray
 import xarray as xr
 import matplotlib.pyplot as plt
 import seaborn as sn
@@ -19,12 +20,6 @@ E.g.
     python3 03c-plot_cumulative_abrupt_shift.py --sm_path "/mnt/data/romi/output/paper_1/output_sm_final/out_sm_chp.zarr" --et_path "/mnt/data/romi/output/paper_1/output_Et_final/out_Et_chp.zarr" --p_path "/mnt/data/romi/output/paper_1/output_precip_final/out_precip_chp.zarr" --test 'stc' --outdir '/mnt/data/romi/figures/paper_1/supplementary_final/supp_abrupt_shifts'
 
 """
-
-# --- defaults ---
-SM_PATH = "/mnt/data/romi/output/paper_1/output_sm_final/out_sm_chp.zarr"
-ET_PATH = "/mnt/data/romi/output/paper_1/output_Et_final/out_Et_chp.zarr"
-P_PATH  = "/mnt/data/romi/output/paper_1/output_precip_final/out_precip_chp.zarr"
-
 
 START_YEAR = 2000
 WEEKS_PER_YEAR = 52.1775
