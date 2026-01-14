@@ -78,18 +78,15 @@ The workflow is run per variable: ```sm```, ```Et```, ```precip```. The workflow
 ### 1. Compute rolling EWS per tile
 
 ```
-   # Script: 01-run_ews.py
-   # E.g: 
-   python 01-run_ews.py --dataset <INPUT_DATASET> --variable sm --freq W --window_years 5 --out sm --workers 8
+   python3 01-run_ews.py --dataset <PATH> --variable <NAME> --config config.yaml
 
-   # Outputs are saved to: processed_tiles_sm/*.zarr
+   # Outputs are saved to: <RUN_NAME>/*.zarr
 ```
 ### 2. Merge tiles: 
 
 ```
-   # Script: 01a-combine_ews_output.py
-   # E.g:
-   python 01a-combine_ews_output.py --output_dir processed_tiles_sm --variable sm
+   # Outputs from step 1 inferred 
+   python3 01a-combine_ews_output.py --run <RUN_NAME> --variable <VAR> --config config.yaml
 
    # Output path is defined inside 01a-* (edit or use config)
 ```
@@ -97,15 +94,14 @@ The workflow is run per variable: ```sm```, ```Et```, ```precip```. The workflow
 ### 3. Plot EWS delta maps (S3):
    
 ```
-python 01b-plot_deltas.py --dataset_path <PATH_TO_out_sm.zarr> --variable sm --output_path outputs/figures/deltas/sm/
-# NB: output path must end with /. 
+python3 01b-plot_deltas.py --variable <VAR> --config config.yaml
 ```
 
 ### 4. Sensitivity analysis (S1):
 
 ```
-python 01c-sensitivity.py --dataset <PATH_TO_out_sm.zarr> --variable sm --outdir outputs/tables/sensitivity/sm/ --i0 0 --i1 50 --j0 0 --j1 50
-# Outputs:
+python3 01c-sensitivity.py --variable <VAR> --config config.yaml
+# Outputs: 
 #    Kappa (agreement) matrices per indicator
 #    Light's kappa summaries
 #    Kendall tau summaries per configuration 
@@ -115,7 +111,7 @@ python 01c-sensitivity.py --dataset <PATH_TO_out_sm.zarr> --variable sm --outdir
 ### 5. Compute Kendall tau:
 
 ```
-python 02-run_kt.py --input <PATH_TO_out_sm.zarr> --workers 8
+python 02-run_kt.py --variable <VAR> --config config.yaml
 # Output:
    out_sm_kt.zarr
 ```
@@ -123,8 +119,8 @@ python 02-run_kt.py --input <PATH_TO_out_sm.zarr> --workers 8
 ### 6. Plot Kendall Tau and biome-level summaries (Figs. 2 - 4, S2):
 
 ```
-python 02a-plot_kt.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir outputs/figures/kt/sm/
-python 02b-plot_biomes.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir outputs/figures/biomes/sm/ --mode indicators
+python 02a-plot_kt.py --var <VAR> --config config.yaml
+python 02b-plot_biomes.py --var <VAR> --config config.yaml
 
 ```
 
@@ -133,38 +129,37 @@ python 02b-plot_biomes.py --dataset <PATH_TO_out_sm_kt.zarr> --var sm --outdir o
 Repeat the pre-break / pre–pseudo-break reruns for whichever breakpoint test you analyze (stc, pettitt, or var).
 
 ```
-python 03-run_changepoints.py --fp <PATH_TO_RAW_INPUT_NETCDF_OR_ZARR> --var sm
-python 03a-plot_changepoints.py --dataset_path <PATH_TO_CHGPOINT_ZARR> --var sm --out_dir outputs/figures/changepoints/sm/
+python 03-run_changepoints.py --var <VAR> --config config.yaml
+python 03a-plot_changepoints.py --var <VAR> --config config.yaml
 
 ```
 
 Plot example time series with abrupt shifts (Fig. 6): 
 
 ```
-python 03b-plot_example_abrupt_shift.py --raw <PATH_TO_out_sm.zarr> --chp <PATH_TO_CHGPOINT_ZARR> --var sm --outdir outputs/figures/abrupt_examples/sm/ --n 12
+python3 03b-plot_example_abrupt_shift.py --var <VAR> --config config.yaml
 ```
 
 Plot cummulative area with abrupt shifts (S7; all variables): 
 
 ```
-python 03c-plot_cumulative_abrupt_shift.py --test stc --outdir outputs/figures/abrupt_cumulative/
+python 03c-plot_cumulative_abrupt_shift.py --var <VAR> --config config.yaml
 ```
 
 ### 8. Alternative trend metrics (Theil-Sen and mean change) + agreement (S4, S5, S6): 
 
 ```
-python 04-run_theil_sen.py --input <PATH_TO_out_sm.zarr> --workers 8 --alpha 0.05
-python 04a-plot_theil_sen.py --dataset_path <PATH_TO_out_sm_ts.zarr> --variable sm --output_path outputs/figures/theil_sen/sm/
+python 04-run_theil_sen.py --var <VAR> --config config.yaml
+python 04a-plot_theil_sen.py --var <VAR> --config config.yaml
 ```
 
 ```
-python 04b-run_mean_change.py --input <PATH_TO_out_sm.zarr> --workers 8 --alpha 0.05
-python 04c-plot_mean_change.py --dataset_path <PATH_TO_out_sm_meanchange.zarr> --variable sm --output_path outputs/figures/mean_change/sm/
-# NB: output path must end with / 
+python 04b-run_mean_change.py --var <VAR> --config config.yaml
+python 04c-plot_mean_change.py --var <VAR> --config config.yaml
 ```
 
 ```
-04d-agreement.py
+04d-agreement.py --config config.yaml
 ```
    
 ### 9. Breakpoint masking + true positive evaluation (ML pre-requisites): 
@@ -172,7 +167,7 @@ python 04c-plot_mean_change.py --dataset_path <PATH_TO_out_sm_meanchange.zarr> -
 Create masked raw datasets (positives = true breakpoints; negatives = pseudo-breakpoints):
 
 ```
-python 05-mask_breakpoints.py --ews_ds_path <PATH_TO_out_sm.zarr> --var sm --out_dir outputs/zarr/masked/
+python 05-mask_breakpoints.py --var <VAR> --config config.yaml
 ```
 
 This writes (in --out_dir), for each breakpoint test and combined: 
@@ -191,7 +186,7 @@ Negatives trimmed at pesudo-breakpoints (pseudo-break times sampled from the pos
 - <var>_cp_masked_var_neg.zarr
 
 **Important**: these outputs contain the raw variable time series only (trimmed to ≤ breakpoint time). You must rerun EWS on them. 
-Repeat steps 1-3 for both the positives and negatives: 
+Repeat steps 1-3 for both the positives and negatives. Use the CLIs detailed in the scripts to overwrite default file paths: 
 
 #### Positives:
 
@@ -255,15 +250,10 @@ This produces:
 
 
 
-```
-# Plot positives/negatives
-python 05a-plot_true_positives.py --ews_kt_path <PATH_TO_out_sm_kt.zarr> --ds_cp_path <PATH_TO_CHGPOINT_ZARR> --var sm --out_dir outputs/figures/true_positives/sm/
-```
-
 ### 10a. Build predictor layers: 
 
 ```
-python 06a-preprocess_rf_drivers.py
+python 06a-preprocess_rf_drivers.py --config config.yaml
 # Output: driver layers as Zarr stores (temperature, precipitation, soil moisture, PET, aridity, ENSO correlation, etc.).
 ```
 
@@ -276,14 +266,10 @@ The classifier in 06b-run_random_forest.py does not use Kendall’s tau computed
 - 
 This means you must run a second EWS + Kendall τ pass for positives and a third EWS + Kendall τ pass for negatives (pseudo-breaks). These are required inputs to the ML script.
 ```
-python 06b-run_random_forest.py \
-  --tau_full     <PATH_TO_out_var_kt.zarr> \
-  --tau_pre      <PATH_TO_out_var_breakpoint_stc_kt.zarr> \
-  --tau_pre_neg  <PATH_TO_out_var_breakpoint_stc_neg_kt.zarr> \
-  --breaks       <PATH_TO_out_var_chp.zarr> \
-  --var          <sm|Et|precip> \
-  --cp_test      stc \
-  --outdir       outputs/ml
+python3 06b-run_random_forest_scipy.py \
+  --var sm \
+  --cp_test stc \
+  --outdir /mnt/data/romi/figures/paper_1/xgboost_results
 ```
 
 
