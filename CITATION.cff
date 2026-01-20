@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it."
+title: "25_09_water_resilience_ews"
+authors:
+  - family-names: "Lotcheris"
+    given-names: "Romi Amilia"
+version: "0.1.0"
+date-released: "2026-01-20"
+url: "https://github.com/romlotch/25_09_water_resilience_ews/tree/main"
