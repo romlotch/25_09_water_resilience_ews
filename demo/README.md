@@ -9,8 +9,7 @@ cd 25_09_water_resilience_ews
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-```
+
 ls demo
 
 # optionally delete old demo outputs if they exist
