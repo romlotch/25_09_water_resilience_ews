@@ -4,6 +4,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+(DEMO := REPO / "demo").mkdir(exist_ok=True)
+(DEMO / "data").mkdir(parents=True, exist_ok=True)
+(DEMO / "outputs").mkdir(parents=True, exist_ok=True)
+(DEMO / "resources").mkdir(parents=True, exist_ok=True)
 
 def make_demo_dataset(
     var: str = "sm",
