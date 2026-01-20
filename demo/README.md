@@ -51,25 +51,25 @@ python 01-run_ews.py \
 # find the file output folder that was created:
 python -c "from pathlib import Path; p=Path('outputs'); print([x.name for x in p.iterdir()])"
 
-python 01a-combine_ews_output.py
+python 01a-combine_ews_output.py \
   --output_dir outputs/processed_tiles/demo_sm \ 
   --variable sm \
   --suffix demo \
   --config demo/config.demo.yaml
 
 # list merged outputs
-python -c "from pathlib import Path; print([str(x) for x in Path('outputs').glob('*.zarr')])"
+python -c "from pathlib import Path; print([str(x) for x in Path('outputs/zarr').glob('*.zarr')])"
 
 python 02-run_kt.py \
   --input outputs/zarr/out_sm_demo.zarr \
-  --workers 1
+  --workers 1 \
   --config demo/config.demo.yaml
 
 # list outputs
-python -c "from pathlib import Path; print([str(x) for x in Path('outputs').glob('*.zarr')])"
+python -c "from pathlib import Path; print([str(x) for x in Path('outputs/zarr').glob('*.zarr')])"
 
 python 02a-plot_kt.py --dataset outputs/zarr/out_sm_demo_kt.zarr --var sm --config demo/config.demo.yaml
-python 02b-plot_biomes.py --var sm --config demo/config.demo.yaml
+python 02b-plot_biomes.py --dataset outputs/zarr/out_sm_demo_kt.zarr --var sm --config demo/config.demo.yaml
 
 # find the figures
 python -c "from pathlib import Path; p=Path('outputs'); figs=list(p.rglob('*.png'))+list(p.rglob('*.svg'))+list(p.rglob('*.pdf')); print([str(x) for x in figs])"
