@@ -137,6 +137,7 @@ def make_demo_dataset(
 
         # Compose field
         field = base[None, :, :] + seasonal[:, None, None] + drift[:, None, None] + noise
+        
 
 
     tmp = xr.Dataset(coords={"lat": lat, "lon": lon})
