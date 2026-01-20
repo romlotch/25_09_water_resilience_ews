@@ -2,7 +2,7 @@
 
 This repository contains code to reproduce the analyses and figures for: 
 
-R. Lotcheris, N. Knecht, L. Wang-Erlansson, J. Rocha. (submitted to Nature Water). Global assessment of terrestrial water cycle resilience. Preprint DOI: https://eartharxiv.org/repository/view/11409/.
+R. A. Lotcheris, N. Knecht, L. Wang-Erlansson, J. Rocha. Global assessment of terrestrial water cycle resilience. Preprint DOI: https://eartharxiv.org/repository/view/11409/.
 
 We assess the resilience of green water variables (transpiration, soil moisture, and precipitation) using early warning signals (EWS) and breakpoint detection on remotely sensed time series data. This repository reproduces Figs. 1 - 5, Extended Data Figs A1 and A2, and Supplementary Materials S1 to S14. All data for this publication was retrieved from publicly available, open datasets. Data sources are listed in the manuscript under the heading 'Data Availability'. 
 
