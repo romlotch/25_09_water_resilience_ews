@@ -18,6 +18,8 @@ def main() -> None:
     # 1) Make demo data
     run(["python", str(DEMO / "make_demo_data.py")])
 
+    run(["python", str(DEMO / "make_demo_resources.py")])
+
     # 2) Run EWS on the demo dataset
     run([
         "python", str(REPO / "01-run_ews.py"),
