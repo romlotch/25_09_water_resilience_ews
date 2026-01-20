@@ -46,6 +46,7 @@ python 01-run_ews.py \
   --dataset demo/data/demo_sm.zarr \
   --variable sm \
   --out demo_sm \
+  --freq W \
   --config demo/config.demo.yaml
 
 # find the file output folder that was created:
