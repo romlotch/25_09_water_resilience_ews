@@ -92,7 +92,7 @@ def make_demo_dataset(
     x_prev = np.zeros((nlat, nlon), dtype="float32")
     field = np.empty((T, nlat, nlon), dtype="float32")
 
-    # For FD region: maintain a two-state “regime” variable that flips with increasing probability
+    # for one region maintain a two-state “regime” variable that flips with increasing probability
     state = np.ones((nlat, nlon), dtype="int8")  # +1/-1, only meaningful where reg_fd_inc is True
 
     for i in range(T):
