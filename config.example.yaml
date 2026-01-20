@@ -2,8 +2,8 @@ project:
   repo_root: "."
 
 paths:
-  data_root: "data"          # where your large input datasets live (not tracked)
-  outputs_root: "outputs"    # everything generated goes here
+  data_root: "data"          
+  outputs_root: "outputs"    
   drivers:
     final: /path/to/driver_analysis_final
     intermediate: /path/to/driver_analysis
