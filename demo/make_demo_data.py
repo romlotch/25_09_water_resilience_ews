@@ -27,7 +27,7 @@ def _global_1deg_grid():
 def make_demo_dataset(
     var: str = "sm",
     start: str = "2001-01-01",
-    end: str = "20010-12-31",
+    end: str = "2010-12-31",
     freq: str = "W",   # weekly (works well with EWS pipelines)
     seed: int = 42,
 ) -> xr.Dataset:
