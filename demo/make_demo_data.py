@@ -54,12 +54,14 @@ def make_demo_dataset(
     # Deterministic background: lat gradient + seasonality
     t = np.arange(T, dtype="float64")
     tfrac = t / max(1, (T - 1))
-    seasonal = np.sin(2 * np.pi * t / 52.0).astype("float64")
+    seasonal = 0.15 * np.sin(2 * np.pi * t / 52.0) + 0.05 * np.cos(2 * np.pi * t / 52.0)
+    drift = 0.0005 * t # small trend
     lat_abs = np.abs(lat) / 90.0
     season_amp_lat = (0.01 + 0.03 * lat_abs).astype("float64")
     seasonal_3d = seasonal[:, None, None] * season_amp_lat[None, :, None]
 
-    base = (0.35 + 0.05 * (LAT / 90.0) + 0.02 * (LON / 180.0)).astype("float64") # baseline mean
+    base = 0.5 + 0.05 * np.sin(np.deg2rad(LAT)) + 0.03 * np.cos(np.deg2rad(LON))
+    noise = rng.normal(0.0, 0.03, size=(T, nlat, nlon))
 
     # Define special regions for synthetic  EWS
     reg_ac1_var_inc   = _mask_box(LAT, LON, 40, 55, -120, -90)   # A: AC1 VAR up
@@ -134,7 +136,7 @@ def make_demo_dataset(
         x_prev = x
 
         # Compose field
-        field[i, :, :] = (base + seasonal_3d[i, :, :] + x).astype("float64")
+        field = base[None, :, :] + seasonal[:, None, None] + drift[:, None, None] + noise
 
 
     tmp = xr.Dataset(coords={"lat": lat, "lon": lon})
@@ -147,7 +149,7 @@ def make_demo_dataset(
 
     # keeping values in [0,1]
     if var.lower() in {"sm", "soil_moisture"}:
-        field = 0.1 + 0.8 * (1.0 / (1.0 + np.exp(-field)))
+        field = 0.05 + 0.90 * (1.0 / (1.0 + np.exp(-field)))
         field = field + rng.normal(0.0, 5e-2, size=field.shape)
         field = np.clip(field, 0.001, 0.999)
         field = field.astype("float64")
