@@ -22,11 +22,11 @@ def _global_1deg_grid(lat_desc: bool = True):
     IMPORTANT: lat_desc=True makes lat run north->south so that
     imshow(origin='upper') plots correctly without flipping.
     """
-    lon = np.arange(-179.5, 180.0, 1.0).astype("float32")   # 360
+    lon = np.arange(-179.5, 180.0, 1.0).astype("float64")   # 360
     if lat_desc:
-        lat = np.arange(89.5, -90.0, -1.0).astype("float32")  # 180 (descending)
+        lat = np.arange(89.5, -90.0, -1.0).astype("float64")  # 180 (descending)
     else:
-        lat = np.arange(-89.5, 90.0, 1.0).astype("float32")   # ascending
+        lat = np.arange(-89.5, 90.0, 1.0).astype("float64")   # ascending
     return lat, lon
 
 
@@ -52,14 +52,14 @@ def make_demo_dataset(
     LAT, LON = np.meshgrid(lat, lon, indexing="ij")
 
     # Deterministic background: lat gradient + seasonality
-    t = np.arange(T, dtype="float32")
+    t = np.arange(T, dtype="float64")
     tfrac = t / max(1, (T - 1))
-    seasonal = np.sin(2 * np.pi * t / 52.0).astype("float32")
+    seasonal = np.sin(2 * np.pi * t / 52.0).astype("float64")
     lat_abs = np.abs(lat) / 90.0
-    season_amp_lat = (0.01 + 0.03 * lat_abs).astype("float32")
+    season_amp_lat = (0.01 + 0.03 * lat_abs).astype("float64")
     seasonal_3d = seasonal[:, None, None] * season_amp_lat[None, :, None]
 
-    base = (0.35 + 0.05 * (LAT / 90.0) + 0.02 * (LON / 180.0)).astype("float32") # baseline mean
+    base = (0.35 + 0.05 * (LAT / 90.0) + 0.02 * (LON / 180.0)).astype("float64") # baseline mean
 
     # Define special regions for synthetic  EWS
     reg_ac1_var_inc   = _mask_box(LAT, LON, 40, 55, -120, -90)   # A: AC1 VAR up
@@ -77,16 +77,16 @@ def make_demo_dataset(
     phi0 = 0.35
     sig0 = 0.02
 
-    x_prev = np.zeros((nlat, nlon), dtype="float32")
-    field = np.empty((T, nlat, nlon), dtype="float32")
+    x_prev = np.zeros((nlat, nlon), dtype="float64")
+    field = np.empty((T, nlat, nlon), dtype="float64")
 
     state = np.ones((nlat, nlon), dtype="int8")
 
     for i in range(T):
         f = float(tfrac[i])  # 0..1
 
-        phi = np.full((nlat, nlon), phi0, dtype="float32")
-        sig = np.full((nlat, nlon), sig0, dtype="float32")
+        phi = np.full((nlat, nlon), phi0, dtype="float64")
+        sig = np.full((nlat, nlon), sig0, dtype="float64")
 
         # A: 
         phi[reg_ac1_var_inc] = (0.25 + 0.65 * f)     # 0.25 -> 0.90
@@ -101,14 +101,14 @@ def make_demo_dataset(
         sig[reg_mixed] = (0.060 - 0.035 * f)         # 0.060 -> 0.025
 
         # Default eps: Gaussian
-        eps = rng.normal(0.0, 1.0, size=(nlat, nlon)).astype("float32") * sig
+        eps = rng.normal(0.0, 1.0, size=(nlat, nlon)).astype("float64") * sig
 
         # C:
         if reg_skew_kurt_inc.any():
             df = 20.0 - 17.0 * f      # 20 -> 3 (heavier tails later)
-            t_noise = rng.standard_t(df, size=(nlat, nlon)).astype("float32") * sig
+            t_noise = rng.standard_t(df, size=(nlat, nlon)).astype("float64") * sig
             skew_w = 0.0 + 0.9 * f
-            exp_noise = (rng.exponential(scale=1.0, size=(nlat, nlon)).astype("float32") - 1.0) * sig
+            exp_noise = (rng.exponential(scale=1.0, size=(nlat, nlon)).astype("float64") - 1.0) * sig
             eps_sk = t_noise + skew_w * exp_noise
             eps[reg_skew_kurt_inc] = eps_sk[reg_skew_kurt_inc]
 
@@ -119,22 +119,22 @@ def make_demo_dataset(
             state[flips] *= -1
 
             regime_amp = 0.00 + 0.10 * f
-            regime_term = regime_amp * state.astype("float32")
+            regime_term = regime_amp * state.astype("float64")
 
             p_jump = 0.001 + 0.05 * f
-            jumps = ((rng.random((nlat, nlon)) < p_jump) & reg_fd_inc).astype("float32")
-            jump_sign = rng.choice(np.array([-1.0, 1.0], dtype="float32"), size=(nlat, nlon))
+            jumps = ((rng.random((nlat, nlon)) < p_jump) & reg_fd_inc).astype("float64")
+            jump_sign = rng.choice(np.array([-1.0, 1.0], dtype="float64"), size=(nlat, nlon))
             jump_amp = 0.00 + 0.18 * f
             jump_term = jumps * jump_sign * jump_amp
 
-            eps[reg_fd_inc] = (eps[reg_fd_inc] + regime_term[reg_fd_inc] + jump_term[reg_fd_inc]).astype("float32")
+            eps[reg_fd_inc] = (eps[reg_fd_inc] + regime_term[reg_fd_inc] + jump_term[reg_fd_inc]).astype("float64")
 
         # AR(1) update
-        x = (phi * x_prev + eps).astype("float32")
+        x = (phi * x_prev + eps).astype("float64")
         x_prev = x
 
         # Compose field
-        field[i, :, :] = (base + seasonal_3d[i, :, :] + x).astype("float32")
+        field[i, :, :] = (base + seasonal_3d[i, :, :] + x).astype("float64")
 
 
     tmp = xr.Dataset(coords={"lat": lat, "lon": lon})
@@ -147,8 +147,10 @@ def make_demo_dataset(
 
     # keeping values in [0,1]
     if var.lower() in {"sm", "soil_moisture"}:
-        field = 0.2 + 0.6 * (1.0 / (1.0 + np.exp(-field)))  # (0.2, 0.8)
-        field = field.astype("float32")
+        field = 0.1 + 0.8 * (1.0 / (1.0 + np.exp(-field)))
+        field = field + rng.normal(0.0, 5e-2, size=field.shape)
+        field = np.clip(field, 0.001, 0.999)
+        field = field.astype("float64")
 
     ds = xr.Dataset(
         data_vars={var: (("time", "lat", "lon"), field)},
