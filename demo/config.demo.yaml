@@ -13,29 +13,25 @@ paths:
   ml_results: "demo/outputs/ml_results"
 
 resources:
-  # Optional; only needed if you run map/biome plotting scripts that read them.
-  landsea_mask_grib: "demo/resources/landsea_mask.grib"
-  tnc_biomes_shapefile: "demo/resources/tnc_terr_ecoregions.shp"
+  # Stand-ins created by demo/make_demo_resources.py
+  landsea_mask_grib: "demo/resources/landsea_mask_demo.nc"
+  tnc_biomes_shapefile: "demo/resources/biomes/tnc_terr_ecoregions.shp"
 
-  # Optional masks; only needed if referenced by plotting or driver prep.
+  # Optional 
   urban_mask_zarr: "demo/resources/masks/urban_mask.zarr"
   crop_mask_zarr: "demo/resources/masks/crop_mask.zarr"
   irrigated_areas: "demo/resources/masks/irrigated_areas.zarr"
 
-  # Optional climate resources; only needed for aridity/driver layers (06a) or any script that expects them.
+  # Not used in the demo unless you run 06a/06b
   era5_root: "demo/resources/era5"
   pet_dir: "demo/resources/pet"
   era5_precip_monthly_nc: "demo/resources/era5_tp_monthly_demo.nc"
   pet_monthly_zarr: "demo/resources/monthly_pet_demo.zarr"
-
-  # Optional; only needed for ML.
   groundwater_depth_nc_files: []
-
-  # Optional ENSO / irrigation references (06a)
   enso_index_csv: "demo/resources/enso_demo.csv"
   gmia_irrigated_area_asc: "demo/resources/gmia_demo.asc"
   gee_exports_dir: "demo/resources/gee_exports"
-
+  
 drivers:
   # Produced by 06a (not in demo)
   groundwater_table_zarr: "demo/outputs/driver_analysis/driver_groundwater_table.zarr"
