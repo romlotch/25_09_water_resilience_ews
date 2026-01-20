@@ -38,7 +38,7 @@ def make_demo_dataset(
     var: str = "sm",
     start: str = "2001-01-01",
     end: str = "2015-12-31",
-    freq: str = "W",   # weekly (works well with EWS pipelines)
+    freq: str = "W",   # weekly 
     seed: int = 42,
 ) -> xr.Dataset:
     rng = np.random.default_rng(seed)
@@ -50,9 +50,7 @@ def make_demo_dataset(
 
     LAT, LON = np.meshgrid(lat, lon, indexing="ij")
 
-    # -------------------------------------------------------------------------
-    # Deterministic background: lat gradient + seasonality (kept mild)
-    # -------------------------------------------------------------------------
+    # Deterministic background: lat gradient + seasonality
     t = np.arange(T, dtype="float32")
     tfrac = t / max(1, (T - 1))
     seasonal = np.sin(2 * np.pi * t / 52.0).astype("float32")
@@ -62,9 +60,7 @@ def make_demo_dataset(
 
     base = (0.35 + 0.05 * (LAT / 90.0) + 0.02 * (LON / 180.0)).astype("float32") # baseline mean
 
-    # -------------------------------------------------------------------------
-    # Define special regions for synthetic "EWS signal" behaviour
-    # -------------------------------------------------------------------------
+    # Define special regions for synthetic  EWS
     reg_ac1_var_inc   = _mask_box(LAT, LON, 40, 55, -120, -90)   # A: AC1 VAR up
     reg_ac1_var_dec   = _mask_box(LAT, LON, 45, 60,   0,   25)   # B: AC1 VAR down
     reg_skew_kurt_inc = _mask_box(LAT, LON, -5, 10,  10,   30)   # C: skew kurt up
@@ -164,5 +160,5 @@ if __name__ == "__main__":
     ds = make_demo_dataset(var="sm")
     out = DEMO / "data" / "demo_sm.zarr"
     ds.to_zarr(out, mode="w")
-     print(f"Wrote {out}")
+    print(f"Wrote {out}")
     print("lat[0], lat[-1]:", float(ds.lat.values[0]), float(ds.lat.values[-1]))
