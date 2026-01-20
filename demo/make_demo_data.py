@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
+import regionmask
 
 REPO = Path(__file__).resolve().parents[1]
 (DEMO := REPO / "demo").mkdir(exist_ok=True)
@@ -135,13 +136,19 @@ def make_demo_dataset(
         # Compose field
         field[i, :, :] = (base + seasonal_3d[i, :, :] + x).astype("float32")
 
-   
+
+    tmp = xr.Dataset(coords={"lat": lat, "lon": lon})
+    land = ~regionmask.defined_regions.natural_earth_v5_0_0.land_110.mask(tmp).isnull()
+    land_vals = land.values
+    field[:, ~land_vals] = np.nan
+    
     # Apply no-data patch (all-NaN for all time) + keep everything else valid
     field[:, reg_nodata] = np.nan
 
     # keeping values in [0,1]
     if var.lower() in {"sm", "soil_moisture"}:
-        field = np.clip(field, 0.0, 1.0)
+        field = 0.2 + 0.6 * (1.0 / (1.0 + np.exp(-field)))  # (0.2, 0.8)
+        field = field.astype("float32")
 
     ds = xr.Dataset(
         data_vars={var: (("time", "lat", "lon"), field)},
