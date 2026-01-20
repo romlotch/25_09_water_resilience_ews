@@ -2,8 +2,8 @@ project:
   repo_root: "."
 
 paths:
-  data_root: "demo/data"
-  outputs_root: "demo/outputs"
+  data_root: "data"
+  outputs_root: "outputs"
 
   # Only used by driver/ML steps (06a/06b)
   drivers:
