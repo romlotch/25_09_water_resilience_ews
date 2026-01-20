@@ -24,12 +24,10 @@ def _global_1deg_grid():
 def _mask_box(LAT, LON, lat_min, lat_max, lon_min, lon_max):
     return (LAT >= lat_min) & (LAT <= lat_max) & (LON >= lon_min) & (LON <= lon_max)
 
-
-
 def make_demo_dataset(
     var: str = "sm",
     start: str = "2001-01-01",
-    end: str = "2010-12-31",
+    end: str = "2015-12-31",
     freq: str = "W",   # weekly (works well with EWS pipelines)
     seed: int = 42,
 ) -> xr.Dataset:
