@@ -15,14 +15,16 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _global_1deg_grid():
-    """
-    1-degree global grid with cell centers:
-      lat: -89.5 .. 89.5 (180)
-      lon: -179.5 .. 179.5 (360)
-    """
-    lat = np.arange(-89.5, 90.0, 1.0)
-    lon = np.arange(-179.5, 180.0, 1.0)
-    return lat, lon
+    # 1-degree cell centers
+    lat = np.arange(-89.5, 90.0, 1.0)     # 180
+    lon = np.arange(-179.5, 180.0, 1.0)   # 360
+    return lat.astype("float32"), lon.astype("float32")
+
+
+def _mask_box(LAT, LON, lat_min, lat_max, lon_min, lon_max):
+    return (LAT >= lat_min) & (LAT <= lat_max) & (LON >= lon_min) & (LON <= lon_max)
+
+
 
 def make_demo_dataset(
     var: str = "sm",
