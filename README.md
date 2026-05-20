@@ -54,7 +54,7 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Original scripts used hard-coded paths (e.g., large data, land masks, biome shapefiles). To make the repo portable, put all machine-specific paths into a local config file:
+Original scripts used hard-coded paths (e.g., large data, land masks, biome shapefiles). Put all machine-specific paths into a local config file:
 
 1. Copy the example config and edit hardcoded filepaths as needed.
 
